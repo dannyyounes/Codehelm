@@ -1,5 +1,7 @@
 # CodeHelm
 
+[![Python tests](https://github.com/dannyyounes/Codehelm/actions/workflows/tests.yml/badge.svg)](https://github.com/dannyyounes/Codehelm/actions/workflows/tests.yml)
+
 **CodeHelm** is an early-stage, open-source Python CLI for orchestrating AI software engineering agents.
 
 ## Vision
