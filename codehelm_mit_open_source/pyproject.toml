@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codehelm"
+version = "0.1.0"
+description = "Hybrid orchestration CLI for autonomous software engineering agents"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["typer>=0.15,<1", "pydantic>=2.10,<3", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10"]
+
+[project.scripts]
+codehelm = "codehelm.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codehelm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
