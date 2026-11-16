@@ -6,7 +6,7 @@ import typer
 import yaml
 from codehelm.execution.worktrees import WorktreeManager, WorktreeError
 from codehelm.providers.adapters import CLIProvider, ProviderError, provider_names
-from codehelm.orchestrator.lifecycle import LifecycleEngine, TaskStore
+from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.integrations.github_pr import PullRequestError
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
@@ -274,29 +274,38 @@ def schedule_durable(
     limit_usd: str = typer.Option(..., help="Total plan USD budget"),
     heartbeat_seconds: int = typer.Option(30, min=5, max=300),
     additional_aud_per_task: str = typer.Option("0", help="Estimated additional AUD charge per task; subscription-only=0"),
+    reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
+    test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
+    security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
     execute: bool = typer.Option(False),
 ) -> None:
-    """Atomically claim one ready wave, with durable attempt and concurrency limits."""
+    """Claim one ready wave. A quality policy continues that claim through the gates."""
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event, Thread
     try:
         plan_obj = load_plan(plan_file)
         scheduler = DurableScheduler(STATE_DIR / "state.db", plan_obj, prefix)
         budget = DispatchBudget(max_attempts, max_total_attempts, max_parallel)
+        policy = load_policy(STATE_DIR / "quality.yaml")
         if not execute:
             typer.echo(f"Durable state: {scheduler.snapshot()}")
             typer.echo("Dry run. Add --execute to claim and launch one wave.")
+            if policy.present:
+                typer.echo("Quality policy active: execution continues through quality gates.")
             return
+        if policy.present and (policy.require_review or policy.require_architecture):
+            if not reviewer or reviewer == provider:
+                raise ValueError("Quality policy requires --reviewer set to a different provider")
         limits = Limits(limit_tokens, Decimal(limit_usd))
+        resumed = scheduler.claim_resumable(budget)
         chosen = scheduler.claim_budgeted(budget, provider, reserve_tokens,
                                           Decimal(reserve_usd), limits,
                                           MonthlyPolicy(), Decimal(additional_aud_per_task))
+        wave = resumed + [sid for sid in chosen if sid not in resumed]
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         stories = {story.id: story for story in plan_obj.stories}
         def launch(sid: str):
             story = stories[sid]
-            attempt = scheduler.snapshot()[sid][1]
-            task_id = f"{prefix}-{sid}-A{attempt}"
             prompt = (f"Implement {sid}: {story.title}\\n{story.description}\\n"
                       "Acceptance criteria:\\n" + "\\n".join(story.acceptance_criteria))
             stop = Event()
@@ -307,13 +316,17 @@ def schedule_durable(
             heartbeat_thread = Thread(target=keep_alive, daemon=True)
             heartbeat_thread.start()
             try:
-                result = engine.execute(task_id, prompt, provider)
-                state = "failed" if result.exit_code else "awaiting_validation"
-                scheduler.finish(sid, state, result.error)
-                return sid, state
+                status = scheduler.carry_story(
+                    sid, engine, prompt=prompt, provider=provider,
+                    test_command=[test_cmd], security_command=[security_cmd],
+                    reviewer=reviewer, docs_provider=provider,
+                    heartbeat=lambda: scheduler.heartbeat(sid))
+                return sid, status
+            except ClaimLost:
+                return sid, "claimed"
             except Exception as exc:
                 try:
-                    scheduler.finish(sid, "failed", str(exc))
+                    scheduler.settle(sid, "failed", str(exc))
                 except ValueError:
                     pass
                 return sid, "failed"
@@ -321,10 +334,10 @@ def schedule_durable(
                 stop.set()
                 heartbeat_thread.join(timeout=2)
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
-            results = list(pool.map(launch, chosen))
+            results = list(pool.map(launch, wave))
         for sid, status in results:
             typer.echo(f"{sid}: {status}")
-        if not chosen:
+        if not wave:
             typer.echo("No stories eligible under dependencies and budget.")
     except (ValueError, PlanningError, OSError, ArithmeticError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -407,7 +420,7 @@ def schedule_retry(
 @app.command("schedule")
 def schedule(
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
-    completed: str = typer.Option("", help="Comma-separated explicitly completed local story IDs"),
+    completed: str = typer.Option("", help="Comma-separated story IDs; refused when a quality policy exists"),
     provider: str = typer.Option("claude", help="Comma-separated CLI providers"),
     prefix: str = typer.Option("PLAN", help="Task ID prefix"),
     max_parallel: int = typer.Option(2, min=1, max=8),
@@ -419,6 +432,10 @@ def schedule(
         plan_obj = load_plan(plan_file)
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         done = {v.strip() for v in completed.split(",") if v.strip()}
+        if done and load_policy(STATE_DIR / "quality.yaml").present:
+            raise ValueError(
+                "schedule --completed is refused while a quality policy exists; "
+                "use schedule-complete after ready_for_pr")
         dispatched = {story.id for story in plan_obj.stories
                       if engine.store.get(f"{prefix}-{story.id}") is not None}
         pending = ready_stories(plan_obj, done, dispatched)
@@ -626,7 +643,7 @@ def schedule_quality(
     prefix: str = typer.Option("PLAN"),
     execute: bool = typer.Option(False, help="Persist the contract outcome and dispatch transition"),
 ) -> None:
-    """Evaluate recorded evidence for one story. Does not accept agent-written evidence JSON."""
+    """Evaluate recorded evidence for one story. Does not re-run gate commands."""
     try:
         policy = load_policy(STATE_DIR / "quality.yaml")
         if not policy.present:

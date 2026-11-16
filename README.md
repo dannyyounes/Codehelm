@@ -286,16 +286,16 @@ existing persisted task lifecycle. The command never marks Stories complete
 from a successful agent exit: results remain `awaiting_validation`.
 
 Prerequisite Stories must be explicitly attested as completed in a subsequent
-invocation using `--completed S1,S2`; this flag is a **manual assertion**,
-not a verified PR/Jira completion signal. Do not assert completion until
-review, documentation, post-doc validation and required human merge approval
-are satisfied. Existing dispatched task IDs are not rerun automatically.
-This command still has no automatic cross-branch integration, dependency merge,
-distributed locking, or provider quotas. Durable scheduler state and estimated
-budgets were added in v1.2–v1.4; this legacy `schedule` path does not use them.
-`--completed` remains a manual assertion and does not read the v1.7 quality
-contract. Use `schedule-complete` after `schedule-quality` when a policy file
-is present.
+invocation using `--completed S1,S2` when no quality policy file exists. That
+flag is a **manual assertion**, not a verified PR/Jira completion signal. Do
+not assert completion until review, documentation, post-doc validation and
+required human merge approval are satisfied. When `.codehelm/quality.yaml` is
+present, `--completed` is refused. Use `schedule-complete` after the story is
+`ready_for_pr`, a draft PR is recorded, and a person has confirmed the merge.
+Existing dispatched task IDs are not rerun automatically. This command still
+has no automatic cross-branch integration, dependency merge, distributed
+locking, or provider quotas. Durable scheduler state and estimated budgets
+were added in v1.2–v1.4; this legacy `schedule` path does not use them.
 
 ## Durable scheduling and bounded execution (v1.2)
 
@@ -319,9 +319,21 @@ complete; CodeHelm does **not** independently verify GitHub merge status.
 This milestone is durable *batch dispatch*, not a long-running daemon or a
 crash-resumable model session. It did not heartbeat claims or reserve
 token/USD budgets; v1.3 and v1.4 add those admission controls. There is still
-no cross-host liveness check, no automatic retry, and no sandbox. Attempt
-limits are not monetary spend protection. Each `schedule-durable --execute`
-dispatches one wave.
+no cross-host liveness check, no automatic retry of a failed story, and no
+sandbox. Attempt limits are not monetary spend protection. Each
+`schedule-durable --execute` dispatches one wave.
+
+When `.codehelm/quality.yaml` exists, that same claim continues through the
+test, security, review, documentation, and post-documentation gates before
+the dispatch row is released. The story then becomes `blocked`,
+`awaiting_human_approval`, or `ready_for_pr` from the recorded evidence.
+Passing tests do not attest acceptance criteria, and a high-risk path does
+not approve itself. With no policy file, a successful agent still stops at
+`awaiting_validation`. An interrupted coding agent is not relaunched.
+`schedule-durable` can resume an interrupted story on the same attempt only
+after the agent has already finished, and it skips gates that already passed.
+`schedule-retry` still starts a new attempt for a failed, blocked, or
+interrupted story. `ready_for_pr` does not unlock dependent stories.
 
 ## Budget ledger and safe scheduler checkpoints (v1.3)
 
@@ -469,9 +481,10 @@ again before pushing. A task left at `awaiting_pr` before the policy file
 existed is not grandfathered; re-run the post-documentation gates or
 `quality-eval --execute`. `schedule-complete` also requires that latest outcome,
 a recorded draft PR, and `--confirmed-merged`. CodeHelm still does not ask
-GitHub whether the PR merged. Evidence is stored per attempt. An interrupted
-claim cannot be advanced; `schedule-retry` starts a new attempt, and the
-previous attempt's rows do not count.
+GitHub whether the PR merged. Evidence is stored per attempt. `schedule-quality`
+still refuses an interrupted claim. `schedule-durable` can resume that claim
+on the same attempt after the coding agent has finished. `schedule-retry`
+starts a new attempt, and the previous attempt's rows do not count.
 
 ```bash
 codehelm validate PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
@@ -482,9 +495,12 @@ codehelm schedule-quality S1 --plan-file .codehelm/plan.json --prefix PLAN --exe
 codehelm quality-approve PLAN-S1-A1 --approver "Your Name" --execute
 ```
 
-`schedule-quality` does not re-run pytest, bandit, or the reviewer. It only
-reads evidence those commands already recorded. Missing evidence blocks the
-story.
+`schedule-durable --execute` runs the gate commands and model reviews once per
+attempt while the claim is held. It does not repeat a stage that already
+passed for that attempt. `schedule-quality` does not re-run pytest, bandit,
+or the reviewer. It only reads evidence those commands already recorded.
+Missing evidence blocks the story. Re-scoring after `quality-attest` or
+`quality-approve` does not spend another reviewer call.
 
 Current limits: no quality-debt register, no signed approval, no container
 sandbox around the gate commands, and no automatic proof that each acceptance

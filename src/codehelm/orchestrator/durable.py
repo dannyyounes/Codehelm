@@ -1,12 +1,24 @@
-"""SQLite-backed dispatch claims, bounded retries and conservative recovery."""
+"""SQLite-backed dispatch claims, bounded retries and conservative recovery.
+
+When a quality policy file exists, a claimed story can continue through the
+quality gates before the claim is released. A missing policy leaves a
+successful agent at awaiting_validation.
+"""
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sqlite3
 
-from codehelm.orchestrator.lifecycle import TaskStore
+from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.planning.planner import Plan
 from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
+
+# A live or unfinished coding agent must not be relaunched on resume.
+_NOT_RESUMABLE = frozenset({"queued", "running", "failed", "pr_created"})
+_DURABLE_RESULTS = frozenset({
+    "awaiting_validation", "failed", "blocked", "awaiting_human_approval", "ready_for_pr",
+})
 
 
 @dataclass(frozen=True)
@@ -178,13 +190,112 @@ class DurableScheduler:
     def finish(self, story_id: str, status: str, error: str = "") -> None:
         if status not in {"awaiting_validation", "failed"}:
             raise ValueError("Invalid agent result")
+        self._release_claim(story_id, status, error)
+
+    def settle(self, story_id: str, status: str, error: str = "") -> None:
+        """Release a live claim to an agent result or a quality outcome."""
+        if status not in _DURABLE_RESULTS:
+            raise ValueError("Invalid durable result")
+        self._release_claim(story_id, status, error)
+
+    def _release_claim(self, story_id: str, status: str, error: str) -> None:
         with sqlite3.connect(self.store.database) as db:
             result = db.execute(
                 """UPDATE dispatches SET state=?, error=? WHERE prefix=? AND story_id=?
                    AND state='claimed'""",
-                (status, error[:1000], self.prefix, story_id))
+                (status, (error or "")[:1000], self.prefix, story_id))
             if result.rowcount != 1:
                 raise ValueError("Story is not currently claimed")
+
+    def claim_resumable(self, budget: DispatchBudget) -> list[str]:
+        """Re-claim interrupted stories whose coding agent already finished.
+
+        Attempts and budget reservations are left as they were. Stories still
+        queued, running, or failed stay interrupted so a live agent is not relaunched.
+        A missing policy file resumes nothing.
+        """
+        policy = load_policy(policy_path_for(self.store.database))
+        if not policy.present:
+            return []
+        now = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.store.database, timeout=30, isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = {sid: (state, attempts) for sid, state, attempts in db.execute(
+                "SELECT story_id,state,attempts FROM dispatches WHERE prefix=?", (self.prefix,))}
+            active = sum(state == "claimed" for state, _ in rows.values())
+            capacity = budget.max_active - active
+            selected: list[str] = []
+            if capacity > 0:
+                for story in self.plan.stories:
+                    if len(selected) >= capacity:
+                        break
+                    state, attempts = rows.get(story.id, ("", 0))
+                    if state != "interrupted" or attempts < 1:
+                        continue
+                    task_id = f"{self.prefix}-{story.id}-A{attempts}"
+                    task = db.execute(
+                        "SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+                    if task is None or task[0] in _NOT_RESUMABLE:
+                        continue
+                    result = db.execute(
+                        """UPDATE dispatches SET state='claimed', claimed_at=?, error=NULL
+                           WHERE prefix=? AND story_id=? AND state='interrupted'""",
+                        (now, self.prefix, story.id))
+                    if result.rowcount == 1:
+                        selected.append(story.id)
+            db.execute("COMMIT")
+            return selected
+
+    def carry_story(self, story_id: str, engine: LifecycleEngine, *, prompt: str, provider: str,
+                    test_command: list[str] | None = None, security_command: list[str] | None = None,
+                    reviewer: str = "", docs_provider: str = "",
+                    heartbeat: Callable[[], bool] | None = None,
+                    timeout: int = 300, agent_timeout: int = 600) -> str:
+        """Advance one claimed story. Quality gates run only when a policy file exists.
+
+        The coding agent is started only when this attempt has no task row yet.
+        Gate commands and model reviews that already passed for the attempt are
+        not repeated. Acceptance criteria are not inferred from a green test run.
+        """
+        snapshot = self.snapshot()
+        if story_id not in snapshot:
+            raise ValueError("Unknown story")
+        state, attempts = snapshot[story_id]
+        if state != "claimed":
+            raise ValueError("Story is not currently claimed")
+        if attempts < 1:
+            raise ValueError("No attempt to advance")
+        story = next((item for item in self.plan.stories if item.id == story_id), None)
+        if story is None:
+            raise ValueError("Unknown story")
+        policy = load_policy(policy_path_for(self.store.database))
+        needs_reviewer = policy.present and (policy.require_review or policy.require_architecture)
+        if needs_reviewer and (not reviewer or reviewer == provider):
+            raise ValueError("Quality policy requires a reviewer that is not the implementer")
+        task_id = f"{self.prefix}-{story_id}-A{attempts}"
+        task = self.store.get(task_id)
+        if task is None:
+            if heartbeat is not None and not heartbeat():
+                raise ClaimLost("Claim lost before the coding agent started")
+            result = engine.execute(task_id, prompt, provider, agent_timeout)
+            if result.exit_code:
+                self.settle(story_id, "failed", result.error)
+                return "failed"
+        elif task.status in {"queued", "running"}:
+            raise ValueError("Coding agent still in progress; refusing to relaunch")
+        elif task.status == "failed":
+            self.settle(story_id, "failed", task.error or "agent failed")
+            return "failed"
+        if not policy.present:
+            self.settle(story_id, "awaiting_validation")
+            return "awaiting_validation"
+        decision = engine.run_contract_gates(
+            task_id, list(test_command or []), list(security_command or []), reviewer,
+            docs_provider or provider, timeout=timeout, docs_timeout=agent_timeout,
+            heartbeat=heartbeat, acceptance_criteria=list(story.acceptance_criteria),
+            story_id=story.id)
+        self.settle(story_id, decision.status, decision_error(decision))
+        return decision.status
 
     def retry(self, story_id: str, budget: DispatchBudget) -> None:
         """Explicit retry authorization after inspecting the previous attempt."""
