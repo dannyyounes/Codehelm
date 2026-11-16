@@ -17,6 +17,7 @@ from codehelm.providers.adapters import AgentResult
 from codehelm.quality.contract import (
     ContractDecision, QualityEvidence, QualityPolicy, assess, evaluate, load_policy,
 )
+from codehelm.quality.diffdigest import diff_digest
 from codehelm.quality.gates import command_gate
 
 
@@ -277,7 +278,7 @@ def test_high_risk_change_requires_human_approval(tmp_path):
     assert engine.store.get(task_id).status == "awaiting_human_approval"
     assert scheduler.apply_quality("S1") == "awaiting_human_approval"
     scheduler.store.record_evidence(task_id, "human_approval", "human", passed=True,
-                                    attempt=1, identity="danny")
+                                    attempt=1, identity="danny", detail=diff_digest(repo))
     assert scheduler.apply_quality("S1") == "ready_for_pr"
     assert scheduler.snapshot()["S1"][0] == "ready_for_pr"
 
