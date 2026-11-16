@@ -30,6 +30,7 @@ STATE_SCHEMA_VERSION = 2
 _EVIDENCE_SOURCES = {
     "tests": {"command_gate"},
     "security": {"command_gate"},
+    "architecture_check": {"command_gate"},
     "review": {"independent_review"},
     "architecture": {"independent_review"},
     "docs": {"documentation_agent"},
@@ -194,7 +195,7 @@ class TaskStore:
             raise ValueError(f"{gate} requires detail text")
         if gate == "quality_debt" and (passed is not True or not detail or not identity):
             raise ValueError("Quality debt requires a passing finding and a reason")
-        if gate in {"tests", "security"} and passed and exit_code != 0:
+        if gate in {"tests", "security", "architecture_check"} and passed and exit_code != 0:
             raise ValueError(f"{gate} pass requires exit code 0")
         timestamp = now()
         with sqlite3.connect(self.database) as db:
@@ -254,7 +255,11 @@ class TaskStore:
 
 
 def _contract_stages(policy) -> list[tuple[str, str]]:
-    """Ordered gates. Documentation is followed by a second test/security/review pass."""
+    """Ordered gates. Documentation is followed by a second test/security/review pass.
+
+    A configured architecture command runs immediately before the model
+    architecture stage. It is not inserted when architecture review is off.
+    """
     pre: list[tuple[str, str]] = []
     if policy.require_tests:
         pre.append(("tests", "command"))
@@ -267,6 +272,8 @@ def _contract_stages(policy) -> list[tuple[str, str]]:
         stages.append(("docs", "docs"))
         stages.extend(pre)
     if policy.require_architecture:
+        if policy.architecture_cmd:
+            stages.append(("architecture_check", "command"))
         stages.append(("architecture", "architecture"))
     return stages
 
@@ -586,7 +593,10 @@ class LifecycleEngine:
                                 docs_timeout: int, implementer: str) -> None:
         if kind == "command":
             label = f"post_docs_{gate}" if post else gate
-            command = list(test_command if gate == "tests" else security_command)
+            if gate == "architecture_check":
+                command = list(self._policy().architecture_cmd)
+            else:
+                command = list(test_command if gate == "tests" else security_command)
             self._run_named_command(
                 task_id, attempt, workspace, gate, command, timeout, f"validating_{label}")
             return

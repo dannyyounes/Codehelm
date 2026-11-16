@@ -10,6 +10,9 @@ diff. Oversized-change justification stays an operator attestation. A quality
 debt accepts one unresolved finding on the current attempt when its text
 matches. It does not waive tests, security, review, architecture, docs,
 acceptance, or human approval.
+An optional architecture command is a separate command_gate result and does not
+replace the model architecture review. Content risk patterns are optional; when
+none are configured, only path globs classify risk.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +50,8 @@ _POLICY_FIELDS = {
     "max_retries",
     "human_approval_risks",
     "risk_paths",
+    "architecture_cmd",
+    "risk_patterns",
 }
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
 _ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
@@ -116,6 +121,8 @@ class QualityPolicy:
     max_retries: int = 2
     human_approval_risks: frozenset[str] = field(default_factory=lambda: frozenset(HIGH_RISK))
     risk_paths: tuple[tuple[str, tuple[str, ...]], ...] = _DEFAULT_RISK_PATHS
+    architecture_cmd: tuple[str, ...] = ()
+    risk_patterns: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -131,6 +138,7 @@ class QualityEvidence:
     changed_lines: int
     test_exit_code: int | None = None
     security_exit_code: int | None = None
+    architecture_check_exit: int | None = None
     architecture_approved: bool = False
     reviewer_approved: bool = False
     reviewer_identity: str = ""
@@ -182,6 +190,8 @@ def evaluate(policy: QualityPolicy, evidence: QualityEvidence) -> ContractDecisi
         failures.append("tests_not_verified")
     if policy.require_security and evidence.security_exit_code != 0:
         failures.append("security_scan_not_verified")
+    if policy.architecture_cmd and evidence.architecture_check_exit != 0:
+        failures.append("architecture_check_not_verified")
     if policy.require_architecture and not evidence.architecture_approved:
         failures.append("architecture_review_missing")
     if policy.require_review and (
@@ -215,6 +225,38 @@ def _require_int(value, field_name: str, low: int, high: int) -> int:
     if type(value) is not int or not low <= value <= high:
         raise ValueError(f"{field_name} must be an integer from {low} to {high}")
     return value
+
+
+def _load_architecture_cmd(value) -> tuple[str, ...]:
+    """A present command is a nonempty argv. None is handled by the caller."""
+    if (
+        not isinstance(value, list) or not value
+        or not all(isinstance(item, str) and item and "\x00" not in item for item in value)
+    ):
+        raise ValueError(
+            "architecture_cmd must be a nonempty list of nonempty strings with no NUL characters")
+    return tuple(value)
+
+
+def _load_risk_patterns(value) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """A present mapping is compiled now. An invalid regex fails the policy load."""
+    if not isinstance(value, dict) or not value:
+        raise ValueError("risk_patterns must be a nonempty mapping of risk to regex lists")
+    converted = []
+    for risk, patterns in value.items():
+        if not isinstance(risk, str) or not risk.strip():
+            raise ValueError("risk_patterns keys must be nonempty strings")
+        if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(item, str) and item.strip() for item in patterns
+        ):
+            raise ValueError(f"risk_patterns.{risk} must be a nonempty list of regex strings")
+        for item in patterns:
+            try:
+                re.compile(item)
+            except re.error as exc:
+                raise ValueError(f"risk_patterns.{risk} has an invalid regex: {exc}") from exc
+        converted.append((risk, tuple(patterns)))
+    return tuple(converted)
 
 
 def load_policy(path: Path) -> QualityPolicy:
@@ -258,6 +300,14 @@ def load_policy(path: Path) -> QualityPolicy:
                 raise ValueError(f"risk_paths.{risk} must be a nonempty list of globs")
             converted.append((risk, tuple(patterns)))
         risk_paths = tuple(converted)
+    if "architecture_cmd" not in data or data["architecture_cmd"] is None:
+        architecture_cmd = ()
+    else:
+        architecture_cmd = _load_architecture_cmd(data["architecture_cmd"])
+    if "risk_patterns" not in data:
+        risk_patterns = ()
+    else:
+        risk_patterns = _load_risk_patterns(data["risk_patterns"])
     return QualityPolicy(
         present=True,
         schema_version=POLICY_SCHEMA_VERSION,
@@ -272,6 +322,8 @@ def load_policy(path: Path) -> QualityPolicy:
         max_retries=_require_int(data.get("max_retries", 2), "max_retries", 1, 5),
         human_approval_risks=frozenset(item.strip() for item in risks),
         risk_paths=risk_paths,
+        architecture_cmd=architecture_cmd,
+        risk_patterns=risk_patterns,
     )
 
 
@@ -340,11 +392,44 @@ def collect_diff(workspace: Path | None) -> tuple[list[str], int]:
     return names, sum(files.values())
 
 
-def _risks_for(paths: list[str], policy: QualityPolicy) -> list[str]:
+def _changed_file_text(workspace: Path, relative: str) -> str | None:
+    """Read one changed path that resolves inside the workspace."""
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        return None
+    raw = Path(relative)
+    if raw.is_absolute():
+        return None
+    root = workspace.resolve()
+    try:
+        resolved = (root / raw).resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_file():
+        return None
+    try:
+        return resolved.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def _risks_for(paths: list[str], policy: QualityPolicy, workspace: Path | None = None) -> list[str]:
     found = []
     for risk, patterns in policy.risk_paths:
         if any(glob_match(pattern, path) for path in paths for pattern in patterns):
             found.append(risk)
+    if workspace is not None and workspace.is_dir() and policy.risk_patterns and paths:
+        compiled = [
+            (risk, tuple(re.compile(pattern) for pattern in patterns))
+            for risk, patterns in policy.risk_patterns
+        ]
+        for path in paths:
+            text = _changed_file_text(workspace, path)
+            if text is None:
+                continue
+            for risk, patterns in compiled:
+                if any(pattern.search(text) is not None for pattern in patterns):
+                    found.append(risk)
     return sorted(set(found))
 
 
@@ -406,6 +491,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
     ]
     tests = _latest(rows, "tests")
     security = _latest(rows, "security")
+    architecture_check = _latest(rows, "architecture_check")
     review = _latest(rows, "review")
     architecture = _latest(rows, "architecture")
     docs = _latest(rows, "docs")
@@ -432,12 +518,13 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         changed_lines=changed_lines,
         test_exit_code=exit_of(tests),
         security_exit_code=exit_of(security),
+        architecture_check_exit=exit_of(architecture_check),
         architecture_approved=architecture_approved,
         reviewer_approved=reviewer_approved,
         reviewer_identity=reviewer_identity,
         implementer_identity=implementer_identity,
         docs_verified=bool(docs and docs.source == "documentation_agent" and docs.passed),
-        risks=sorted(set(recorded_risks) | set(_risks_for(changed_files, policy))),
+        risks=sorted(set(recorded_risks) | set(_risks_for(changed_files, policy, workspace))),
         human_approved=human_approved,
         oversized_justification=justification,
         unresolved_findings=findings,
