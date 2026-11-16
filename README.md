@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a published container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: direct provider APIs, a published container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -484,8 +484,11 @@ human_approval_risks:
   - production_infrastructure
 ```
 
-Omitted keys use those defaults. `architecture_cmd` and `risk_patterns` are
-optional and empty when omitted. `gate_runner` defaults to `namespace`. `approval_signature` defaults to `off`.
+Omitted keys use those defaults. `architecture_cmd` is optional and empty when
+omitted. When `risk_patterns` is omitted or null, a small built-in content
+scanner runs. A configured mapping replaces that set. `risk_patterns: {}`
+turns content scanning off. `gate_runner` defaults to `namespace`.
+`approval_signature` defaults to `off`.
 `approval_signers` is a directory of `allowed_signers` and `gpg-public.asc`.
 It is required only when `approval_signature` is `required`.
 `gate_image` is required only when `gate_runner` is `container`; empty or
@@ -505,7 +508,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
-| Diff size and risk paths | `git` numstat plus policy globs, and optional `risk_patterns` | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
+| Diff size and risk paths | `git` numstat plus policy globs, and `risk_patterns` | Repository state. When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` stores the GitHub login and a sha256 digest of the workspace diff | A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
@@ -521,11 +524,16 @@ CODEHELM_ACCEPTANCE	<exact planned criterion>	passed
 
 Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
 `infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
-`risk_patterns` are optional content regexes over changed files. With none
-configured, only path globs classify risk. A match on a changed file adds that
-risk name even when the path matches no glob. Files outside the change set are
-not scanned. With no `risk_patterns`, a risky edit outside those globs is not
-detected unless an operator records it.
+When `risk_patterns` is omitted or null, a built-in scanner also checks changed
+files for a PEM or OpenSSH private-key header, an `AKIA` access-key id, a
+`ghp_` or `github_pat_` token, and a line that drops a table or column. A
+configured mapping replaces that set. `risk_patterns: {}` turns content
+scanning off. A match is a heuristic risk name, not proof of a secret or a
+migration, and the scanner does not detect every risky edit. Path globs still
+apply. A match on a changed file adds that risk name even when the path matches
+no glob. Files outside the change set are not scanned. A risky edit that
+matches neither a path glob nor a content pattern is not detected unless an
+operator records it.
 
 Architecture review is still a model verdict. When that review is required, an
 optional `architecture_cmd` runs first and must also exit 0. It does not

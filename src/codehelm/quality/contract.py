@@ -6,17 +6,21 @@ or from git. A passing test exit code does not verify acceptance criteria. A
 criterion counts only when the test process the orchestrator ran emits a
 CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval stores the
 GitHub login captured when quality-approve ran and a sha256 digest of the
-workspace diff. A later change makes that approval not count. It is not a
-cryptographic signature of the person. An oversized-change justification
+workspace diff. A later change makes that approval not count. With
+approval_signature off, that row is not a cryptographic signature. required
+checks an SSH or GPG signature over the current digest. An oversized-change justification
 counts only when a passing human row has nonempty detail and a nonempty
 identity. Evaluation does not call GitHub again. A quality debt accepts one unresolved finding on the
 current attempt when its text matches. It does not waive tests, security,
 review, architecture, docs, acceptance, or human approval.
 An optional architecture command is a separate command_gate result and does not
-replace the model architecture review. Content risk patterns are optional; when
-none are configured, only path globs classify risk. gate_runner selects the
-namespace sandbox unless it is container. gate_image is required only then.
-Any other runner fails closed. In namespace mode gate_image is ignored.
+replace the model architecture review. When risk_patterns is omitted or null, a
+small built-in content scanner classifies changed files. A configured mapping
+replaces that set. An empty mapping turns content scanning off. A match is a
+heuristic risk finding, not proof of a secret or a migration. Path globs still
+apply. gate_runner selects the namespace sandbox unless it is container.
+gate_image is required only then. Any other runner fails closed. In namespace
+mode gate_image is ignored.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +47,21 @@ _DEFAULT_RISK_PATHS = (
     ("security_sensitive_changes", ("security/**", "**/security/**")),
     ("production_infrastructure", ("deploy/**", "**/deploy/**", "**/infra/**",
                                    "**/.github/workflows/**")),
+)
+
+# Heuristics used when risk_patterns is omitted or null. A nonempty mapping
+# replaces this set; {} turns content scanning off. A match is not proof of a
+# secret or a migration, and these patterns do not detect every risky edit.
+_DEFAULT_RISK_PATTERNS = (
+    ("security_sensitive_changes", (
+        r"(?m)^-----BEGIN (?:RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----",
+        r"\bAKIA[A-Z0-9]{16}\b",
+        r"\bghp_[A-Za-z0-9]{36}\b",
+        r"\bgithub_pat_[A-Za-z0-9_]{82}\b",
+    )),
+    ("database_migrations", (
+        r"(?i)\bDROP[ \t]+(?:TABLE|COLUMN)\b",
+    )),
 )
 
 POLICY_SCHEMA_VERSION = 1
@@ -259,6 +278,19 @@ def _load_architecture_cmd(value) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _compile_risk_patterns(
+    patterns: tuple[tuple[str, tuple[str, ...]], ...],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Compile each regex now. Stored patterns stay readable source strings."""
+    for risk, items in patterns:
+        for item in items:
+            try:
+                re.compile(item)
+            except re.error as exc:
+                raise ValueError(f"risk_patterns.{risk} has an invalid regex: {exc}") from exc
+    return patterns
+
+
 def _load_approval_signature(data: dict) -> tuple[str, str]:
     """off keeps the login-and-digest approval. required demands a signature."""
     mode = data.get("approval_signature", "off")
@@ -310,9 +342,15 @@ def _load_gate_runner(data: dict) -> tuple[str, str]:
 
 
 def _load_risk_patterns(value) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """A present mapping is compiled now. An invalid regex fails the policy load."""
-    if not isinstance(value, dict) or not value:
-        raise ValueError("risk_patterns must be a nonempty mapping of risk to regex lists")
+    """Compile a present mapping now. {} turns content scanning off.
+
+    A non-mapping, including an empty list, fails the policy load. An invalid
+    regex fails closed. A nonempty mapping replaces the built-in set.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("risk_patterns must be a mapping of risk to regex lists")
+    if not value:
+        return ()
     converted = []
     for risk, patterns in value.items():
         if not isinstance(risk, str) or not risk.strip():
@@ -321,13 +359,8 @@ def _load_risk_patterns(value) -> tuple[tuple[str, tuple[str, ...]], ...]:
             isinstance(item, str) and item.strip() for item in patterns
         ):
             raise ValueError(f"risk_patterns.{risk} must be a nonempty list of regex strings")
-        for item in patterns:
-            try:
-                re.compile(item)
-            except re.error as exc:
-                raise ValueError(f"risk_patterns.{risk} has an invalid regex: {exc}") from exc
         converted.append((risk, tuple(patterns)))
-    return tuple(converted)
+    return _compile_risk_patterns(tuple(converted))
 
 
 def load_policy(path: Path) -> QualityPolicy:
@@ -376,7 +409,7 @@ def load_policy(path: Path) -> QualityPolicy:
     else:
         architecture_cmd = _load_architecture_cmd(data["architecture_cmd"])
     if "risk_patterns" not in data or data["risk_patterns"] is None:
-        risk_patterns = ()
+        risk_patterns = _compile_risk_patterns(_DEFAULT_RISK_PATTERNS)
     else:
         risk_patterns = _load_risk_patterns(data["risk_patterns"])
     gate_runner, gate_image = _load_gate_runner(data)
