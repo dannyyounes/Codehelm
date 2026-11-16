@@ -1,6 +1,6 @@
 # Architecture
 
-CodeHelm is a local CLI orchestrator. Model calls are limited to planning, implementation, documentation, and review adapters. Scheduling, budgets, and quality decisions are deterministic Python over SQLite.
+CodeHelm is a local CLI orchestrator. Model calls are limited to planning, implementation, documentation, review, and DesignFlow mockup adapters. Scheduling, budgets, and quality decisions are deterministic Python over SQLite.
 
 The package version is `0.1.0`. The behavior below is what the code does now.
 
@@ -11,6 +11,7 @@ The package version is `0.1.0`. The behavior below is what the code does now.
 - **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. The default transport is the CLI. An opt-in HTTP transport for the same three names is off unless `transport="http"`. It has no default host, model, or token, does not fall back to the CLI, and is not a spending cap.
 - **State:** SQLite in `.codehelm/state.db`. Task rows, dispatch claims, budget reservations, and quality evidence live outside the model context.
 - **Execution:** one Git worktree per coding task. Worktrees are file isolation, not a container sandbox.
+- **DesignFlow:** a screen or form spec is rendered to an HTML mockup. Inline comments are stored locally. `designflow revise --execute` sends the queued comments to a provider and renders the next revision only from JSON that validates. The review server binds to `127.0.0.1` and does not launch a provider. Ported from firstmate's lavish.
 - **Integrations:** optional Jira Cloud REST and draft GitHub pull requests via `gh`. Neither is required to run the engine. Creating a pull request does not merge it. `merge-ready` is off unless `auto_merge: true`, and even then it merges only an open pull request whose gates passed, whose decision required human approval, and whose checks are all success. It does not pass `--auto` or `--admin`, and it does not complete the story. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts one only when `jira_transitions` maps the new state and the story has a `jira_key`. That stays off, and dry-run, unless `jira_transition_execute` is true. A failed post is stored and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true. The plain `schedule` command does not merge, and a merge does not complete the story.
 
 ## Task lifecycle
@@ -69,3 +70,9 @@ High-risk classification uses path globs. When `risk_patterns` is omitted or nul
 ## Budgets and provider use
 
 Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply to an explicitly supplied additional-charge estimate, or to a USD amount multiplied by an operator-supplied AUD-per-USD rate and a source label. `--fetch-aud-rate` is off by default. It reads AUD per USD from frankfurter.app, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. There is no default rate. `--convert-reserve-usd` is off by default. With `--fetch-aud-rate` it converts `--reserve-usd` into the AUD charge and refuses `--additional-usd`. The USD reservation is still stored as USD. `plan-publish --execute` writes returned story keys into the plan; a dry run does not, and an existing `jira_key` is refused. Do not describe any of these as guaranteed spend protection.
+
+## DesignFlow
+
+DesignFlow is a local mockup loop, separate from story dispatch. Screens and comments live in `.codehelm/designflow.db`. HTML files live under `.codehelm/designflow/<screen-id>/`. A draft built from `--field` or `--spec` does not call a provider. `--execute` on `draft` or `revise` does, through the same CLI or HTTP provider adapter as the rest of Codehelm. HTTP stays opt-in and does not fall back to the CLI.
+
+The provider must return one JSON object with `title`, `brief`, and `fields`. Unknown keys, code fences, and raw HTML are refused. The renderer escapes every string it places in the page. The only script in that page is the review client, which posts comments to the loopback server. `send` marks comments queued. `revise --execute` consumes queued comments after the new spec validates. Comments that were not sent stay on the mockup. A failed agent response does not advance the revision.

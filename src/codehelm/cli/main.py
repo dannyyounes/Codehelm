@@ -28,8 +28,10 @@ from codehelm.planning.planner import (
 from codehelm.quality.contract import assess, auto_merge_block, decision_error, load_policy, task_attempt
 from codehelm.quality.diffdigest import diff_digest
 from codehelm.quality.signatures import signature_blob, verify_approval_signature
+from codehelm.designflow.cli import designflow_app
 
 app = typer.Typer(help="CodeHelm: autonomous engineering orchestrator (early scaffold).")
+app.add_typer(designflow_app, name="designflow")
 STATE_DIR = Path(".codehelm")
 
 
