@@ -104,7 +104,7 @@ def parse_plan(raw: str) -> Plan:
 
 
 def _story_jira_key(item: dict, ident: str) -> str:
-    """Optional issue key. Publishing does not write this field."""
+    """Optional issue key. plan-publish writes it after Jira returns one."""
     if "jira_key" not in item or item["jira_key"] is None:
         return ""
     key = item["jira_key"]
@@ -143,6 +143,29 @@ def save_plan(plan: Plan, destination: Path) -> None:
 
 def load_plan(path: Path) -> Plan:
     return parse_plan(Path(path).read_text(encoding="utf-8"))
+
+
+def assign_published_keys(plan: Plan, mapping: dict[str, str]) -> Plan:
+    """Copy story keys Jira returned. A missing or malformed key is refused."""
+    stories = []
+    for story in plan.stories:
+        key = mapping.get(story.id)
+        if not isinstance(key, str) or not _JIRA_KEY.fullmatch(key):
+            raise PlanningError(f"{story.id}: Jira did not return a usable issue key")
+        if story.jira_key and story.jira_key != key:
+            raise PlanningError(f"{story.id}: refusing to replace jira_key {story.jira_key}")
+        stories.append(Story(
+            story.id, story.title, story.description,
+            story.acceptance_criteria, story.dependencies, key))
+    return Plan(plan.epic_title, plan.epic_description, tuple(stories))
+
+
+def replace_plan(plan: Plan, destination: Path) -> None:
+    """Overwrite a plan file. The caller has already created the Jira issues."""
+    destination = Path(destination)
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.write_text(json.dumps(plan.to_dict(), indent=2) + "\n", encoding="utf-8")
+    temporary.replace(destination)
 
 
 def publish_plan_to_jira(plan: Plan, project: str, client) -> dict[str, str]:

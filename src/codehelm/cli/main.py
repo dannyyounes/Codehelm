@@ -22,8 +22,9 @@ from codehelm.orchestrator.monthly_budget import (
     MonthlyBudget, MonthlyPolicy, parse_override_amount)
 from codehelm.orchestrator.fx import FRANKFURTER_SOURCE, fetch_aud_per_usd, resolve_additional_aud
 from decimal import Decimal, InvalidOperation
-from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
-                                      publish_plan_to_jira, PlanningError)
+from codehelm.planning.planner import (
+    assign_published_keys, generate_plan, load_plan, replace_plan, save_plan,
+    publish_plan_to_jira, PlanningError)
 from codehelm.quality.contract import assess, auto_merge_block, decision_error, load_policy, task_attempt
 from codehelm.quality.diffdigest import diff_digest
 from codehelm.quality.signatures import signature_blob, verify_approval_signature
@@ -226,8 +227,8 @@ def merge_ready(
 ) -> None:
     """Merge the recorded pull request. Off unless the policy sets auto_merge: true.
 
-    A dry run does not call GitHub. The scheduler does not call this, and a merge
-    does not mark the story complete.
+    A dry run does not call GitHub. schedule-durable uses these same checks when
+    auto_merge is true. A merge does not mark the story complete.
     """
     try:
         policy = load_policy(STATE_DIR / "quality.yaml")
@@ -384,6 +385,24 @@ def budget_reconcile(
         raise typer.Exit(code=1) from exc
 
 
+def _merge_ready_wave(scheduler, policy, *, execute: bool) -> bool:
+    """Call merge-ready for recorded pull requests when auto_merge is true.
+
+    Off otherwise, and then GitHub is not called. A failure does not complete
+    the story and does not turn the flag off.
+    """
+    if not policy.present or not policy.auto_merge:
+        return False
+    failed = False
+    for story_id, _task_id, _url in scheduler.recorded_pull_requests():
+        try:
+            typer.echo(f"{story_id}: {scheduler.merge_recorded(story_id, execute=execute)}")
+        except (ValueError, OSError, PullRequestError) as exc:
+            typer.echo(f"{story_id}: merge_failed: {exc}")
+            failed = True
+    return failed
+
+
 @app.command("schedule-durable")
 def schedule_durable(
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
@@ -404,6 +423,9 @@ def schedule_durable(
     aud_per_usd: str | None = typer.Option(None, help="Operator-supplied AUD per 1 USD; no default rate"),
     aud_rate_source: str = typer.Option("", help="Label for the supplied rate; this flag does not fetch one"),
     fetch_aud_rate: bool = typer.Option(False, "--fetch-aud-rate", help="Fetch AUD per USD from frankfurter.app; no default rate"),
+    convert_reserve_usd: bool = typer.Option(
+        False, "--convert-reserve-usd",
+        help="Convert --reserve-usd into the AUD charge with --fetch-aud-rate; off by default"),
     reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
     test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
     security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
@@ -418,6 +440,10 @@ def schedule_durable(
         policy = load_policy(STATE_DIR / "quality.yaml")
         budget = DispatchBudget(
             resolve_max_attempts(policy, max_attempts), max_total_attempts, max_parallel)
+        if convert_reserve_usd and not fetch_aud_rate:
+            raise ValueError("Converting --reserve-usd to AUD requires --fetch-aud-rate")
+        if convert_reserve_usd and additional_usd is not None:
+            raise ValueError("Converting --reserve-usd cannot be combined with --additional-usd")
         if fetch_aud_rate and (aud_per_usd is not None or aud_rate_source.strip()):
             raise ValueError("A fetched AUD rate cannot be combined with a supplied rate")
         if fetch_aud_rate:
@@ -427,8 +453,18 @@ def schedule_durable(
                 raise ValueError("Invalid AUD reservation") from exc
             if direct_aud != 0:
                 raise ValueError("A fetched AUD rate cannot be combined with a direct AUD amount")
-            if additional_usd is None:
+            if additional_usd is None and not convert_reserve_usd:
                 raise ValueError("A fetched AUD rate requires a USD amount")
+            if convert_reserve_usd:
+                try:
+                    reserve_amount = Decimal(str(reserve_usd).strip())
+                except (InvalidOperation, ValueError, ArithmeticError) as exc:
+                    raise ValueError(
+                        "AUD conversion rate and USD amount must be positive and finite") from exc
+                if not reserve_amount.is_finite() or reserve_amount <= 0:
+                    raise ValueError(
+                        "AUD conversion rate and USD amount must be positive and finite")
+        usd_for_rate = reserve_usd if convert_reserve_usd else additional_usd
         aud_as_of = None
         if not fetch_aud_rate:
             aud_amount, aud_rate, aud_source = resolve_additional_aud(
@@ -436,9 +472,10 @@ def schedule_durable(
         if not execute:
             typer.echo(f"Durable state: {scheduler.snapshot()}")
             if fetch_aud_rate:
+                scope = " from --reserve-usd" if convert_reserve_usd else ""
                 typer.echo(
                     f"Would fetch the AUD-per-USD rate from {FRANKFURTER_SOURCE} "
-                    f"for {additional_usd} USD. Not recorded.")
+                    f"for {usd_for_rate} USD{scope}. Not recorded.")
             elif aud_rate is not None:
                 typer.echo(
                     f"Would reserve {aud_amount} AUD from {additional_usd} USD "
@@ -446,6 +483,8 @@ def schedule_durable(
             typer.echo("Dry run. Add --execute to claim and launch one wave.")
             if policy.present:
                 typer.echo("Quality policy active: execution continues through quality gates.")
+            if _merge_ready_wave(scheduler, policy, execute=False):
+                raise typer.Exit(code=1)
             return
         if policy.present and (policy.require_review or policy.require_architecture):
             if not reviewer or reviewer == provider:
@@ -453,11 +492,11 @@ def schedule_durable(
         if fetch_aud_rate:
             fetched, aud_source, aud_as_of = fetch_aud_per_usd()
             aud_amount, aud_rate, aud_source = resolve_additional_aud(
-                "0", additional_usd, str(fetched), aud_source)
+                "0", usd_for_rate, str(fetched), aud_source)
         if aud_rate is not None:
             when = f", as of {aud_as_of}" if aud_as_of else ""
             typer.echo(
-                f"AUD reservation {aud_amount} from {additional_usd} USD "
+                f"AUD reservation {aud_amount} from {usd_for_rate} USD "
                 f"at {aud_rate} ({aud_source}{when}).")
         limits = Limits(limit_tokens, Decimal(limit_usd))
         resumed = scheduler.claim_resumable(budget)
@@ -510,7 +549,7 @@ def schedule_durable(
                 jira_failed = True
         for sid, line in scheduler.jira_notes:
             typer.echo(f"{sid}: {line}")
-        if jira_failed:
+        if jira_failed or _merge_ready_wave(scheduler, policy, execute=True):
             raise typer.Exit(code=1)
         if not wave:
             typer.echo("No stories eligible under dependencies and budget.")
@@ -742,7 +781,17 @@ def plan_publish(
         return
     try:
         plan_obj = load_plan(plan_file)
+        if any(story.jira_key for story in plan_obj.stories):
+            raise PlanningError(
+                "Plan already records jira_key; refusing to create duplicate issues")
         mapping = publish_plan_to_jira(plan_obj, project, JiraClient.from_env())
+        updated = assign_published_keys(plan_obj, mapping)
+        try:
+            replace_plan(updated, plan_file)
+        except OSError as exc:
+            listed = ", ".join(f"{sid}={key}" for sid, key in mapping.items())
+            raise PlanningError(
+                f"Jira issues were created but the plan was not updated: {listed}") from exc
     except (PlanningError, JiraError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
