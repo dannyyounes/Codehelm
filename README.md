@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container sandbox, automatic merge or Jira transitions, live usage capture, and a quality-debt register. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, live usage capture, and a quality-debt register. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -521,8 +521,15 @@ records that login only when `--approver` matches it exactly. A dry run does
 not call GitHub. Later scoring trusts the stored row and does not call `gh`
 again. The row is not a signature of the diff.
 
+Test and security commands run through `unshare` with a private user, mount,
+pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The
+workspace is bind-mounted back, and credential environment variables are
+dropped. If `unshare` is missing or the namespace cannot be created, the gate
+fails and the command does not run outside the sandbox. The coding agent and
+the model reviewer are not in that namespace. This is not a container image.
+
 Current limits: no quality-debt register, no signed approval, and no container
-sandbox around the gate commands. A passing test exit code still does not
+image around the gate commands. A passing test exit code still does not
 verify an unnamed acceptance criterion. Architecture review is a second model
 prompt, not a separate deterministic checker. Budgets remain estimates, not
 spend protection.
