@@ -1,3 +1,4 @@
+from enum import Enum
 from pathlib import Path
 import json
 import sqlite3
@@ -5,7 +6,7 @@ import sqlite3
 import typer
 import yaml
 from codehelm.execution.worktrees import WorktreeManager, WorktreeError
-from codehelm.providers.adapters import CLIProvider, ProviderError, provider_names
+from codehelm.providers.adapters import CLIProvider, HTTPProvider, ProviderError, provider_names
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.integrations.github_pr import (
     PullRequestError, github_merge_pull_request, github_pull_request_green, github_user_login)
@@ -28,6 +29,19 @@ from codehelm.quality.signatures import signature_blob, verify_approval_signatur
 
 app = typer.Typer(help="CodeHelm: autonomous engineering orchestrator (early scaffold).")
 STATE_DIR = Path(".codehelm")
+
+
+class AgentTransport(str, Enum):
+    cli = "cli"
+    http = "http"
+
+
+def _transport_option():
+    return typer.Option(
+        AgentTransport.cli,
+        "--transport",
+        help="Coding-agent transport: cli (default) or http. http does not fall back to the CLI.",
+    )
 
 
 @app.command()
@@ -62,6 +76,7 @@ def run(
     jira: str = typer.Option(..., help="Task ID; Jira retrieval is a separate command"),
     prompt: str = typer.Option(..., help="Task instructions"),
     provider: str = typer.Option("claude", help="Installed CLI provider"),
+    transport: AgentTransport = _transport_option(),
     repo: Path = typer.Option(Path("."), help="Git repository"),
     timeout: int = typer.Option(600, min=1, max=3600),
     execute: bool = typer.Option(False, help="Explicitly permit agent execution"),
@@ -72,7 +87,7 @@ def run(
         return
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        result = engine.execute(jira, prompt, provider, timeout)
+        result = engine.execute(jira, prompt, provider, timeout, transport=transport.value)
     except (ValueError, WorktreeError, ProviderError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -364,6 +379,7 @@ def schedule_durable(
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
     prefix: str = typer.Option("PLAN"),
     provider: str = typer.Option("claude"),
+    transport: AgentTransport = _transport_option(),
     max_parallel: int = typer.Option(2, min=1, max=8),
     max_attempts: int | None = typer.Option(None, min=1, max=5),
     max_total_attempts: int = typer.Option(20, min=1, max=100),
@@ -435,7 +451,8 @@ def schedule_durable(
                     sid, engine, prompt=prompt, provider=provider,
                     test_command=[test_cmd], security_command=[security_cmd],
                     reviewer=reviewer, docs_provider=provider,
-                    heartbeat=lambda: scheduler.heartbeat(sid))
+                    heartbeat=lambda: scheduler.heartbeat(sid),
+                    transport=transport.value)
                 return sid, status
             except ClaimLost:
                 return sid, "claimed"
@@ -608,6 +625,7 @@ def schedule(
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
     completed: str = typer.Option("", help="Comma-separated story IDs; refused when a quality policy exists"),
     provider: str = typer.Option("claude", help="Comma-separated CLI providers"),
+    transport: AgentTransport = _transport_option(),
     prefix: str = typer.Option("PLAN", help="Task ID prefix"),
     max_parallel: int = typer.Option(2, min=1, max=8),
     repo: Path = typer.Option(Path("."), help="Git repository"),
@@ -631,7 +649,10 @@ def schedule(
             return
         results = dispatch_batch(plan_obj, done, dispatched,
                                  [v.strip() for v in provider.split(",")],
-                                 prefix, max_parallel, engine.execute)
+                                 prefix, max_parallel,
+                                 lambda task_id, prompt_text, provider_name: engine.execute(
+                                     task_id, prompt_text, provider_name,
+                                     transport=transport.value))
         for item in results:
             typer.echo(f"{item.story_id} -> {item.task_id}: {item.status} ({item.provider})")
         if not results:
@@ -822,14 +843,18 @@ def agent_run(
     prompt: str = typer.Option(..., help="Task instruction"),
     workspace: Path = typer.Option(..., help="Existing workspace directory"),
     timeout: int = typer.Option(600, min=1, max=3600),
+    transport: AgentTransport = _transport_option(),
     execute: bool = typer.Option(False, help="Explicitly allow running the installed agent CLI"),
 ) -> None:
     """Run an installed coding CLI in a specified workspace."""
     if not execute:
-        typer.echo("Dry run only. Add --execute to launch the agent CLI.")
+        typer.echo("Dry run only. Add --execute to launch the agent.")
         return
     try:
-        result = CLIProvider(provider).execute(prompt, workspace, timeout)
+        if transport == AgentTransport.http:
+            result = HTTPProvider(provider).execute(prompt, workspace, timeout)
+        else:
+            result = CLIProvider(provider).execute(prompt, workspace, timeout)
     except ProviderError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

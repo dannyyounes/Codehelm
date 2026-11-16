@@ -22,8 +22,8 @@ import sqlite3
 
 from codehelm.execution.worktrees import WorktreeManager
 from codehelm.orchestrator.budgets import BudgetLedger
-from codehelm.providers.adapters import CLIProvider, AgentResult
-from codehelm.providers.usage import parse_cli_usage
+from codehelm.providers.adapters import CLIProvider, HTTPProvider, AgentResult, ProviderError
+from codehelm.providers.usage import Usage, parse_cli_usage
 from codehelm.quality.gates import GateResult, command_gate, independent_review
 from codehelm.quality.contract import (
     assess, decision_error, load_policy, parse_acceptance_report, policy_path_for,
@@ -448,9 +448,11 @@ class LifecycleEngine:
             return None
         return rows[0][0]
 
-    def _record_recognized_usage(self, task_id: str, provider: str, output: str) -> None:
-        """Record structured CLI stdout. Unknown output and ambiguous rows are skipped."""
-        usage = parse_cli_usage(provider, output)
+    def _record_recognized_usage(self, task_id: str, provider: str, output: str,
+                                 usage: Usage | None = None, *, parse_output: bool = True) -> None:
+        """Record recognized usage. Unknown usage is skipped and is not stored as zero."""
+        if usage is None and parse_output:
+            usage = parse_cli_usage(provider, output)
         if usage is None:
             return
         prefix = self._sole_reserved_prefix(task_id)
@@ -463,18 +465,25 @@ class LifecycleEngine:
             return
 
     def execute(self, task_id: str, prompt: str, provider: str,
-                timeout: int = 600) -> AgentResult:
+                timeout: int = 600, transport: str = "cli") -> AgentResult:
         if self.store.get(task_id):
             raise ValueError(f"Task {task_id} already exists; refusing to rerun automatically")
         if not prompt.strip():
             raise ValueError("Prompt cannot be empty")
-        adapter = CLIProvider(provider)
+        if transport == "http":
+            adapter = HTTPProvider(provider)
+        elif transport == "cli":
+            adapter = CLIProvider(provider)
+        else:
+            raise ProviderError(f"Unknown transport: {transport}")
         self.store.transition(task_id, "queued", provider=provider)
         try:
             workspace = self.worktrees.create(task_id)
             self.store.transition(task_id, "running", workspace=str(workspace.path))
             result = adapter.execute(prompt, workspace.path, timeout)
-            self._record_recognized_usage(task_id, provider, result.output)
+            self._record_recognized_usage(
+                task_id, provider, result.output, result.usage,
+                parse_output=transport != "http")
             if result.exit_code:
                 self.store.transition(task_id, "failed", exit_code=result.exit_code,
                                       error=result.error[:2000])

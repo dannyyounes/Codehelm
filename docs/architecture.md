@@ -8,7 +8,7 @@ The package version is `0.1.0`. The behavior below is what the code does now.
 
 - **Planning:** a provider-neutral adapter returns a structured Epic and Stories. The plan is validated locally (IDs, dependencies, cycles) before anything is dispatched.
 - **Deterministic engine:** task transitions, the dependency-aware scheduler, attempt and concurrency limits, budget admission, and the quality contract.
-- **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. Direct API adapters are not implemented.
+- **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. The default transport is the CLI. An opt-in HTTP transport for the same three names is off unless `transport="http"`. It has no default host, model, or token, does not fall back to the CLI, and is not a spending cap.
 - **State:** SQLite in `.codehelm/state.db`. Task rows, dispatch claims, budget reservations, and quality evidence live outside the model context.
 - **Execution:** one Git worktree per coding task. Worktrees are file isolation, not a container sandbox.
 - **Integrations:** optional Jira Cloud REST and draft GitHub pull requests via `gh`. Neither is required to run the engine. Creating a pull request does not merge it. `merge-ready` is off unless `auto_merge: true`, and even then it merges only an open pull request whose gates passed, whose decision required human approval, and whose checks are all success. It does not pass `--auto` or `--admin`, and it does not complete the story. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests.
@@ -37,7 +37,7 @@ Story completion in the durable scheduler is a separate step. It requires a reco
 - estimated token and USD reservations in the same transaction as a budgeted claim
 - optional additional-AUD monthly admission (warn A$10, critical A$15, pause A$20, epic A$5)
 
-These are admission controls on estimates CodeHelm stores. They are not provider-side spending caps. Live token use is unknown unless a verified usage report is imported.
+These are admission controls on estimates CodeHelm stores. They are not provider-side spending caps. Live token use is unknown unless a verified usage report is imported, structured CLI stdout is recognized by `parse_cli_usage`, or the opt-in HTTP transport returns a usage object `parse_usage` understands. Unknown usage is not stored as zero. HTTP is off by default and is not a spending cap.
 
 A claim heartbeat refreshes `claimed_at` during the agent and, when a policy exists, between quality stages. If the lease expires, the story becomes `interrupted`. Recovery never relaunches a coding agent that is still queued, running, or failed. If the agent had already finished, the next `schedule-durable --execute` can resume that same attempt and skip gates that already passed. `schedule-retry` remains the way to start a new task id (`PREFIX-S1-A2`). Resume does not take a second budget reservation.
 
