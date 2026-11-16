@@ -15,9 +15,14 @@ from codehelm.orchestrator.budgets import BudgetLedger
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.planning.planner import Plan
 from codehelm.providers.usage import parse_cli_usage
-from codehelm.integrations.github_pr import PullRequestError, github_pull_request_merged
+from codehelm.integrations.github_pr import (
+    PullRequestError, github_merge_pull_request, github_pull_request_green,
+    github_pull_request_merged,
+)
 from codehelm.integrations.jira import JiraClient, JiraError
-from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
+from codehelm.quality.contract import (
+    assess, auto_merge_block, decision_error, load_policy, policy_path_for,
+)
 
 # A live or unfinished coding agent must not be relaunched on resume.
 _NOT_RESUMABLE = frozenset({"queued", "running", "failed", "pr_created"})
@@ -512,6 +517,50 @@ class DurableScheduler:
             if result.rowcount != 1:
                 raise ValueError("Story has not finished its dispatch")
         self._jira_after(story_id, "completed", expected)
+
+    def recorded_pull_requests(self) -> list[tuple[str, str, str]]:
+        """Latest attempts whose task is pr_created with a GitHub URL. Does not call GitHub."""
+        found = []
+        snapshot = self.snapshot()
+        for story in self.plan.stories:
+            attempts = snapshot.get(story.id, ("", 0))[1]
+            if attempts < 1:
+                continue
+            task_id = f"{self.prefix}-{story.id}-A{attempts}"
+            task = self.store.get(task_id)
+            url = (task.error or "").strip() if task else ""
+            if task is not None and task.status == "pr_created" and url.startswith("https://github.com/"):
+                found.append((story.id, task_id, url))
+        return found
+
+    def merge_recorded(self, story_id: str, *, execute: bool) -> str:
+        """Merge one recorded pull request. Off unless auto_merge is true.
+
+        A dry run does not call GitHub. A merge does not complete the story and
+        does not turn the flag off. The same checks as merge-ready apply.
+        """
+        policy = load_policy(policy_path_for(self.store.database))
+        if not policy.present or not policy.auto_merge:
+            raise ValueError("auto-merge is off")
+        match = [item for item in self.recorded_pull_requests() if item[0] == story_id]
+        if len(match) != 1:
+            raise ValueError("Task must have a recorded GitHub pull request")
+        _story, task_id, url = match[0]
+        task = self.store.get(task_id)
+        attempt = self.snapshot()[story_id][1]
+        decision = assess(
+            self.store, task_id, attempt=attempt, policy=policy,
+            workspace=Path(task.workspace) if task and task.workspace else None,
+            acceptance_criteria=None, story_id=story_id,
+            implementer=(task.provider or "") if task else "", persist=False)
+        reason = auto_merge_block(policy, decision)
+        if reason:
+            raise ValueError(reason)
+        if not execute:
+            return f"Would merge {url} if every GitHub check is success. Not merged."
+        head = github_pull_request_green(url)
+        github_merge_pull_request(url, head)
+        return f"Merged {url}. The story is not completed."
 
     def checkpoint(self) -> dict:
         """Persist a durable state snapshot; does not resume live CLI sessions."""
