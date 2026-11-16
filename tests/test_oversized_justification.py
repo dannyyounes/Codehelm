@@ -132,3 +132,20 @@ def test_empty_identity_fails_evaluation(tmp_path):
     assert evidence.changed_lines > 400
     assert evidence.oversized_justification == ""
     assert "oversized_change_requires_justification" in decision.failures
+
+
+def test_failed_row_with_identity_does_not_justify(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    (repo / "notes").mkdir()
+    (repo / "notes" / "change.txt").write_text(
+        "".join(f"line {i}\n" for i in range(401)), encoding="utf-8")
+    store = TaskStore(tmp_path / "state.db")
+    store.initialize()
+    store.record_evidence(
+        "T1", "oversized_justification", "human", passed=False, attempt=1,
+        detail="one mechanical rename", identity="dannyyounes")
+    evidence = assemble_evidence(
+        store, "T1", 1, QualityPolicy(), repo, ["Works"], "S1", "claude")
+    decision = evaluate(QualityPolicy(), evidence)
+    assert evidence.oversized_justification == ""
+    assert "oversized_change_requires_justification" in decision.failures

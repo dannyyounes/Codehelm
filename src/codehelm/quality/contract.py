@@ -8,8 +8,8 @@ CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval stores the
 GitHub login captured when quality-approve ran and a sha256 digest of the
 workspace diff. A later change makes that approval not count. It is not a
 cryptographic signature of the person. An oversized-change justification
-counts only when a human row has nonempty detail and a nonempty identity.
-Evaluation does not call GitHub again. A quality debt accepts one unresolved finding on the
+counts only when a passing human row has nonempty detail and a nonempty
+identity. Evaluation does not call GitHub again. A quality debt accepts one unresolved finding on the
 current attempt when its text matches. It does not waive tests, security,
 review, architecture, docs, acceptance, or human approval.
 An optional architecture command is a separate command_gate result and does not
@@ -486,7 +486,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
     ]
     justification = "\n".join(
         row.detail.strip() for row in rows
-        if row.gate == "oversized_justification" and row.source == "human"
+        if row.gate == "oversized_justification" and row.source == "human" and row.passed
         and row.detail.strip() and row.identity.strip()
     )
     current = diff_digest(workspace) if workspace else ""
