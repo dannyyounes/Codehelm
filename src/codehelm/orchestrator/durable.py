@@ -6,6 +6,7 @@ import sqlite3
 
 from codehelm.orchestrator.lifecycle import TaskStore
 from codehelm.planning.planner import Plan
+from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
 
 
 @dataclass(frozen=True)
@@ -190,25 +191,73 @@ class DurableScheduler:
         with sqlite3.connect(self.store.database) as db:
             row = db.execute("SELECT state,attempts FROM dispatches WHERE prefix=? AND story_id=?",
                              (self.prefix, story_id)).fetchone()
-            if not row or row[0] not in {"failed", "interrupted"}:
-                raise ValueError("Only failed or interrupted stories can be retried")
+            if not row or row[0] not in {"failed", "interrupted", "blocked"}:
+                raise ValueError("Only failed, interrupted, or quality-blocked stories can be retried")
             if row[1] >= budget.max_attempts:
                 raise ValueError("Per-story attempt limit reached")
             db.execute("UPDATE dispatches SET state='pending',error=NULL WHERE prefix=? AND story_id=?",
                        (self.prefix, story_id))
+
+    def apply_quality(self, story_id: str) -> str:
+        """Move a story to blocked, awaiting_human_approval, or ready_for_pr from recorded evidence.
+
+        A missing policy file does not change dispatch state. Interrupted stories are
+        refused so a partial attempt cannot advance. Evidence from older attempts is ignored.
+        """
+        policy = load_policy(policy_path_for(self.store.database))
+        snapshot = self.snapshot()
+        if story_id not in snapshot:
+            raise ValueError("Unknown story")
+        state, attempts = snapshot[story_id]
+        if state == "interrupted":
+            raise ValueError("Story is interrupted; inspect and explicitly retry before quality evaluation")
+        if not policy.present:
+            return state
+        if state not in {"awaiting_validation", "blocked", "awaiting_human_approval", "ready_for_pr"}:
+            raise ValueError("Story is not awaiting quality evaluation")
+        if attempts < 1:
+            raise ValueError("No attempt to evaluate")
+        story = next((item for item in self.plan.stories if item.id == story_id), None)
+        if story is None:
+            raise ValueError("Unknown story")
+        task_id = f"{self.prefix}-{story_id}-A{attempts}"
+        task = self.store.get(task_id)
+        workspace = Path(task.workspace) if task and task.workspace else None
+        decision = assess(
+            self.store, task_id, attempt=attempts, policy=policy, workspace=workspace,
+            acceptance_criteria=story.acceptance_criteria, story_id=story.id,
+            implementer=(task.provider or "") if task else "")
+        error = decision_error(decision)
+        with sqlite3.connect(self.store.database, timeout=30) as db:
+            result = db.execute("""UPDATE dispatches SET state=?, error=?
+                WHERE prefix=? AND story_id=? AND state=?""",
+                (decision.status, error[:1000], self.prefix, story_id, state))
+            if result.rowcount != 1:
+                raise ValueError("Story state changed during evaluation")
+        if task:
+            self.store.transition(task_id, decision.status, error=error or None)
+        return decision.status
 
     def complete(self, story_id: str, *, human_verified_merge: bool = False) -> None:
         """Manual completion requires explicit external verification; no API merge check."""
         attempt = self.snapshot().get(story_id, ("", 0))[1]
         if not human_verified_merge:
             raise ValueError("Human verification of merged PR is required")
-        task = self.store.get(f"{self.prefix}-{story_id}-A{attempt}")
+        task_id = f"{self.prefix}-{story_id}-A{attempt}"
+        task = self.store.get(task_id)
         if not task or task.status != "pr_created":
             raise ValueError("A draft PR must exist before manual completion")
+        policy = load_policy(policy_path_for(self.store.database))
+        expected = "awaiting_validation"
+        if policy.present:
+            latest = self.store.latest_evaluation(task_id, attempt)
+            if not latest or latest["status"] != "ready_for_pr":
+                raise ValueError("Quality contract must be ready_for_pr before completion")
+            expected = "ready_for_pr"
         with sqlite3.connect(self.store.database) as db:
             result = db.execute("""UPDATE dispatches SET state='completed'
-                                   WHERE prefix=? AND story_id=? AND state='awaiting_validation'""",
-                                (self.prefix, story_id))
+                                   WHERE prefix=? AND story_id=? AND state=?""",
+                                (self.prefix, story_id, expected))
             if result.rowcount != 1:
                 raise ValueError("Story has not finished its dispatch")
 

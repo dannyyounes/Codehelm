@@ -1,12 +1,27 @@
 # CodeHelm
 
-**CodeHelm** is an early-stage, open-source Python CLI for orchestrating AI software engineering agents.
+[![Python tests](https://github.com/dannyyounes/Codehelm/actions/workflows/tests.yml/badge.svg)](https://github.com/dannyyounes/Codehelm/actions/workflows/tests.yml)
+
+**CodeHelm** is an open-source Python CLI (MIT) for orchestrating AI software engineering agents. The installed package version is still `0.1.0`. The notes below describe behavior that is in this tree, including the optional v1.7 quality contract.
+
+## Current behavior
+
+Implemented in this repository:
+
+- Local configuration, SQLite task state, and Git worktree isolation
+- Claude Code, Codex, and Gemini CLI adapters
+- Single-task lifecycle, dependency-aware dispatch, and a durable SQLite scheduler with bounded attempts, leases, and explicit retry
+- Estimated token/USD reservations and an additional-AUD admission budget
+- Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
+- An optional quality contract, active only when `.codehelm/quality.yaml` exists
+
+Not implemented: direct provider APIs, a container sandbox, authenticated approvals, automatic merge or Jira transitions, live usage capture, and a quality-debt register. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+
+Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
 ## Vision
 
-A hybrid orchestrator combines deterministic workflow control with AI planning and coding. The planned platform coordinates provider-agnostic agents across Jira planning, implementation, testing, security, independent code review, documentation, and pull requests.
-
-> **Status:** Early scaffold. Git worktree creation, listing and safe removal are implemented. Full orchestration, Jira, direct API adapters and quality gates are **not implemented yet**. A minimal CLI provider adapter is available.
+A hybrid orchestrator combines deterministic workflow control with AI planning and coding. It coordinates provider-agnostic agents across planning, implementation, testing, security, independent code review, documentation, and pull requests. Jira is optional.
 
 ## Quick start
 
@@ -34,18 +49,13 @@ codehelm worktree-remove DEV-123
 
 Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses dirty worktrees and preserves branches. This provides file isolation, **not** a security sandbox.
 
-`codehelm init` creates `.codehelm/config.yaml` and a local SQLite state database. The CLI does not yet invoke an AI provider or modify Jira.
+`codehelm init` creates `.codehelm/config.yaml` and a local SQLite state database. It does not create a quality policy and it does not call a provider or Jira. Later commands do, and only when you pass `--execute`.
 
-## Proposed commands
+## Commands
 
-- `codehelm init` — initialise local configuration and state (implemented)
-- `codehelm status` — show scaffold status (implemented)
-- `codehelm worktree-create DEV-123` — create an isolated task worktree (implemented)
-- `codehelm worktree-list` — list Git worktrees (implemented)
-- `codehelm worktree-remove DEV-123` — remove a clean worktree (implemented)
-- `codehelm run --jira DEV-123` — future: run a Jira story through the agent lifecycle
-- `codehelm agents` — future: inspect active agents
-- `codehelm resume <task-id>` — future: resume a checkpointed task
+`codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, and the v1.7 quality commands.
+
+Not implemented under these names: `codehelm agents`, and a generic `codehelm resume <task-id>`. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
 
 ## Design principles
 
@@ -76,7 +86,7 @@ See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [
 
 ## License
 
-License selection pending. **No open-source license has been granted yet**; choose and add a license before public release.
+MIT. See [LICENSE](LICENSE).
 
 ## Provider CLI adapters (v0.3)
 
@@ -94,7 +104,7 @@ codehelm agent-run --provider claude --workspace ../codehelm-worktrees/DEV-123 -
 
 Supported initial CLI names: `claude`, `codex`, `gemini`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
 
-**Not yet included:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing.
+**Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. Direct provider APIs and a container sandbox are still absent.
 
 ## Single-task lifecycle (v0.4)
 
@@ -110,14 +120,17 @@ codehelm task-status DEV-123
 Without `--execute`, the command performs no execution. With it, CodeHelm
 creates an isolated worktree, launches the installed provider CLI, and persists
 `queued → running → awaiting_validation` or `failed` in SQLite. A successful
-CLI exit is **not** story completion or independent code review. Task IDs
-cannot be rerun automatically; resume/retry policy is future work.
+CLI exit is **not** story completion or independent code review. This command
+still refuses to rerun a task id. Explicit retry of a durable story arrived
+in v1.2 and uses a new task id.
 
-**Not yet implemented:** automatic test/security gates, independent review,
+**Not in this milestone:** automatic test/security gates, independent review,
 PR creation, Jira REST operations, provider APIs, agent crash recovery,
-live event streaming, token budgets and container sandboxing. Provider CLIs
-can execute code and incur charges; use trusted workspaces and provider
-permission settings.
+live event streaming, token budgets and container sandboxing. Gates, draft
+PRs, Jira REST, durable retry, and estimated budgets were added in later
+milestones. Direct provider APIs and a container sandbox are still absent.
+Provider CLIs can execute code and incur charges; use trusted workspaces and
+provider permission settings.
 
 
 ## Quality gates (v0.5)
@@ -139,7 +152,10 @@ The reviewer must be a different provider from the coding agent, and must
 return a final line exactly `APPROVED`. Review workspace changes invalidate
 approval. Test/security failure blocks the task; review rejection yields
 `changes_requested`. Successful gates yield `awaiting_documentation`, **not**
-`completed`. Documentation, PR and Jira gates are still pending.
+`completed`. Documentation, PR and Jira gates were still pending at this
+milestone; see v0.6–v0.9. The v1.7 quality contract, when its policy file
+exists, can later replace `awaiting_pr` with `blocked`,
+`awaiting_human_approval`, or `ready_for_pr`.
 
 **Security limitation:** This prototype invokes user-selected executables and
 AI CLIs directly, without a container sandbox. Run only on trusted code with
@@ -161,7 +177,7 @@ README/docs/API/user/developer documentation, and must produce an actual
 documentation-file change. It is not permitted to change non-documentation
 files. Failure blocks the task; success advances it to
 `awaiting_post_docs_validation`. It **does not** mark the story complete.
-A second validation/review pass and PR/Jira integration remain future work.
+A second validation pass, draft PRs, and Jira comments were added in v0.7–v0.9.
 
 Limitations: the checks use working-tree file hashes and do not catch every
 possible side effect (such as modifications to ignored files or Git history).
@@ -178,10 +194,13 @@ independent-review gates again:
 codehelm validate-after-docs DEV-123 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
 ```
 
-Successful gates transition to `awaiting_pr`, **not** `completed`. A failure
-blocks the task or requests changes. CLI commands currently accept executable
-names without arguments. GitHub PR creation and Jira integration are not yet
-implemented. Review is a model verdict, not human merge authorization.
+Successful gates transition to `awaiting_pr`, **not** `completed`, when no
+quality policy file is present. A failure blocks the task or requests changes.
+CLI commands currently accept executable names without arguments. GitHub PR
+creation and Jira integration were not in this milestone; see v0.8 and v0.9.
+Review is a model verdict, not human merge authorization. When
+`.codehelm/quality.yaml` is present, a passing post-documentation run is
+scored by the quality contract instead of moving straight to `awaiting_pr`.
 
 ## GitHub draft pull requests (v0.8)
 
@@ -251,8 +270,8 @@ duplicate Jira issues. A partial Jira failure may leave some issues
 created; inspect Jira before retrying. Live Jira operations have not
 been exercised by automated tests.
 
-Next: approval checkpoints, durable publication mappings, DAG scheduling,
-role assignment and bounded multi-agent execution.
+Later milestones add durable scheduling and bounded execution. Publication
+mappings, role assignment, and authenticated approval checkpoints are still absent.
 
 ## Dependency-aware multi-agent dispatch (v1.1)
 
@@ -271,8 +290,12 @@ invocation using `--completed S1,S2`; this flag is a **manual assertion**,
 not a verified PR/Jira completion signal. Do not assert completion until
 review, documentation, post-doc validation and required human merge approval
 are satisfied. Existing dispatched task IDs are not rerun automatically.
-No automatic cross-branch integration, dependency merge, distributed locking,
-provider quotas, budget accounting or durable scheduler state yet.
+This command still has no automatic cross-branch integration, dependency merge,
+distributed locking, or provider quotas. Durable scheduler state and estimated
+budgets were added in v1.2–v1.4; this legacy `schedule` path does not use them.
+`--completed` remains a manual assertion and does not read the v1.7 quality
+contract. Use `schedule-complete` after `schedule-quality` when a policy file
+is present.
 
 ## Durable scheduling and bounded execution (v1.2)
 
@@ -293,20 +316,21 @@ and **explicit** retry authorization. A dependent story only unlocks after
 a human explicitly confirms its predecessor's PR was merged and marks it
 complete; CodeHelm does **not** independently verify GitHub merge status.
 
-This is durable *batch dispatch*, not a long-running daemon or full
-crash-resumable agent session. There is no automatic heartbeating,
-cross-host process liveness check, auto-retry, token metering, cost accounting,
-or sandbox. The budgets constrain *attempts and parallelism*, not tokens
-or monetary spend. Each `schedule-durable --execute` dispatches one wave.
+This milestone is durable *batch dispatch*, not a long-running daemon or a
+crash-resumable model session. It did not heartbeat claims or reserve
+token/USD budgets; v1.3 and v1.4 add those admission controls. There is still
+no cross-host liveness check, no automatic retry, and no sandbox. Attempt
+limits are not monetary spend protection. Each `schedule-durable --execute`
+dispatches one wave.
 
 ## Budget ledger and safe scheduler checkpoints (v1.3)
 
 The optional budget ledger reserves estimated tokens and USD against explicit
 limits and accepts verified usage reconciliation. CLI providers do not reliably
-report token usage; **this is not a hard provider-side spending cap**. The
-existing `schedule-durable` command does not yet consult this ledger before
-launching agents. To use it safely, reserve each planned attempt before
-manual execution and reconcile only with verified provider data.
+report token usage; **this is not a hard provider-side spending cap**. From
+v1.4, `schedule-durable --execute` reserves this ledger in the same SQLite
+transaction as the claim. `budget-reserve` remains the manual path. Reconcile
+only with verified provider data.
 
 ```bash
 codehelm budget-reserve PLAN-S1-A1 --prefix PLAN --provider claude --tokens 20000 --usd 1.50 --limit-tokens 100000 --limit-usd 10 --execute
@@ -389,3 +413,80 @@ additional AUD charges is supported by the ledger API, but automatic provider
 billing reconciliation and an interactive approval/override workflow are
 not yet implemented. This is an admission pause, not a hard provider cap.
 The legacy `schedule` command does not use these controls.
+
+## Quality contract (v1.7)
+
+The contract is optional. `codehelm init` does not write it. With no
+`.codehelm/quality.yaml`, task transitions stay as they were through v1.6:
+post-documentation success still ends at `awaiting_pr`.
+
+```yaml
+schema_version: 1
+max_changed_lines: 400
+require_acceptance_criteria: true
+require_tests: true
+require_security: true
+require_architecture: true
+require_review: true
+require_docs: true
+max_retries: 2
+human_approval_risks:
+  - authentication_changes
+  - database_migrations
+  - security_sensitive_changes
+  - production_infrastructure
+```
+
+Omitted keys use those defaults. `schema_version` must be `1`. Unknown keys
+or an unknown schema version fail closed. `max_retries` is recorded policy
+only; the enforced attempt cap remains the scheduler's `DispatchBudget`.
+
+Evidence is taken from rows the orchestrator writes after it runs a check,
+and from `git`. An agent-written evidence JSON file is rejected.
+
+| Check | What is stored | What it is |
+| --- | --- | --- |
+| Tests and security | Exit code from `command_gate` | A real process result |
+| Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
+| Documentation | Documentation-agent file check | A real workspace check |
+| Diff size and risk paths | `git` numstat plus policy globs | Repository state |
+| Acceptance criteria | Operator attestation via `quality-attest` | Not inferred from a green test run |
+| Human approval and oversized-change justification | Operator attestation via `quality-approve` or a recorded justification | Not authenticated and not signed |
+
+Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
+`infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
+A risky edit outside those globs is not detected unless an operator records it.
+
+When the policy file exists, `validate-after-docs` and `schedule-quality --execute`
+persist one of three outcomes and use it as the task or dispatch state:
+
+- `blocked`
+- `awaiting_human_approval`
+- `ready_for_pr`
+
+`pr-create` then requires `ready_for_pr` and evaluates the recorded evidence
+again before pushing. A task left at `awaiting_pr` before the policy file
+existed is not grandfathered; re-run the post-documentation gates or
+`quality-eval --execute`. `schedule-complete` also requires that latest outcome,
+a recorded draft PR, and `--confirmed-merged`. CodeHelm still does not ask
+GitHub whether the PR merged. Evidence is stored per attempt. An interrupted
+claim cannot be advanced; `schedule-retry` starts a new attempt, and the
+previous attempt's rows do not count.
+
+```bash
+codehelm validate PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
+codehelm document PLAN-S1-A1 --provider claude --execute
+codehelm quality-attest PLAN-S1-A1 --criterion "Works" --execute
+codehelm validate-after-docs PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
+codehelm schedule-quality S1 --plan-file .codehelm/plan.json --prefix PLAN --execute
+codehelm quality-approve PLAN-S1-A1 --approver "Your Name" --execute
+```
+
+`schedule-quality` does not re-run pytest, bandit, or the reviewer. It only
+reads evidence those commands already recorded. Missing evidence blocks the
+story.
+
+Current limits: no quality-debt register, no signed approval, no container
+sandbox around the gate commands, and no automatic proof that each acceptance
+criterion was exercised. Architecture review is a second model prompt, not a
+separate deterministic checker. Budgets remain estimates, not spend protection.
