@@ -11,7 +11,7 @@ The package version is `0.1.0`. The behavior below is what the code does now.
 - **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. Direct API adapters are not implemented.
 - **State:** SQLite in `.codehelm/state.db`. Task rows, dispatch claims, budget reservations, and quality evidence live outside the model context.
 - **Execution:** one Git worktree per coding task. Worktrees are file isolation, not a container sandbox.
-- **Integrations:** optional Jira Cloud REST and draft GitHub pull requests via `gh`. Neither is required to run the engine. Creating a pull request does not merge it. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests.
+- **Integrations:** optional Jira Cloud REST and draft GitHub pull requests via `gh`. Neither is required to run the engine. Creating a pull request does not merge it. `merge-ready` is off unless `auto_merge: true`, and even then it merges only an open pull request whose gates passed, whose decision required human approval, and whose checks are all success. It does not pass `--auto` or `--admin`, and it does not complete the story. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests.
 
 ## Task lifecycle
 
@@ -25,7 +25,7 @@ With no quality policy file, success ends at `awaiting_pr`. Failures persist as 
 
 With `.codehelm/quality.yaml` present, `schedule-durable` runs those gates inside the claimed attempt and then scores the contract. The manual post-documentation command does the same scoring. The task and the dispatch row become `blocked`, `awaiting_human_approval`, or `ready_for_pr`. `pr-create` is allowed only from `ready_for_pr`, and it evaluates the recorded evidence again before publishing. A failed gate does not launch the later model calls for that attempt.
 
-Story completion in the durable scheduler is a separate step. It requires a recorded pull request, `--confirmed-merged`, and `gh pr view` reporting `state=MERGED` with a merged timestamp. An open or closed pull request does not complete the story. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion. CodeHelm does not merge the pull request. The durable scheduler does not transition Jira issues. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira.
+Story completion in the durable scheduler is a separate step. It requires a recorded pull request, `--confirmed-merged`, and `gh pr view` reporting `state=MERGED` with a merged timestamp. An open or closed pull request does not complete the story. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion. The scheduler does not merge the pull request. `merge-ready --execute` can merge one recorded pull request when `auto_merge` is true, every gate passed, required human approval is present, and every GitHub check is success. A result that is not yet `MERGED` is a failure. That command does not mark the story complete. The durable scheduler does not transition Jira issues. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira.
 
 ## Durable scheduling
 

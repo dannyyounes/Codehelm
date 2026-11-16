@@ -7,7 +7,8 @@ import yaml
 from codehelm.execution.worktrees import WorktreeManager, WorktreeError
 from codehelm.providers.adapters import CLIProvider, ProviderError, provider_names
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
-from codehelm.integrations.github_pr import PullRequestError, github_user_login
+from codehelm.integrations.github_pr import (
+    PullRequestError, github_merge_pull_request, github_pull_request_green, github_user_login)
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
 from codehelm.orchestrator.durable import (
@@ -21,7 +22,7 @@ from codehelm.orchestrator.fx import resolve_additional_aud
 from decimal import Decimal
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
-from codehelm.quality.contract import assess, decision_error, load_policy, task_attempt
+from codehelm.quality.contract import assess, auto_merge_block, decision_error, load_policy, task_attempt
 from codehelm.quality.diffdigest import diff_digest
 from codehelm.quality.signatures import signature_blob, verify_approval_signature
 
@@ -192,6 +193,47 @@ def aud_quote(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"{Decimal(usd)} USD * {rate} = {aud} AUD (source: {source}). Not recorded.")
+
+@app.command("merge-ready")
+def merge_ready(
+    task_id: str,
+    execute: bool = typer.Option(False, help="Merge only when auto-merge is on and every condition holds"),
+) -> None:
+    """Merge the recorded pull request. Off unless the policy sets auto_merge: true.
+
+    A dry run does not call GitHub. The scheduler does not call this, and a merge
+    does not mark the story complete.
+    """
+    try:
+        policy = load_policy(STATE_DIR / "quality.yaml")
+        if not policy.present or not policy.auto_merge:
+            typer.echo("Auto-merge is off. Not merged.")
+            if execute:
+                raise typer.Exit(code=1)
+            return
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        task = store.get(task_id)
+        url = (task.error or "").strip() if task else ""
+        if task is None or task.status != "pr_created" or not url.startswith("https://github.com/"):
+            raise ValueError("Task must have a recorded GitHub pull request")
+        decision = assess(
+            store, task_id, attempt=task_attempt(task_id), policy=policy,
+            workspace=Path(task.workspace) if task.workspace else None,
+            acceptance_criteria=None, story_id=task_id, implementer=task.provider or "",
+            persist=False)
+        reason = auto_merge_block(policy, decision)
+        if reason:
+            raise ValueError(reason)
+        if not execute:
+            typer.echo(f"Would merge {url} if every GitHub check is success. Not merged.")
+            return
+        head = github_pull_request_green(url)
+        github_merge_pull_request(url, head)
+    except (ValueError, OSError, PullRequestError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Merged {url}. The story is not completed.")
 
 
 @app.command("monthly-budget")

@@ -32,13 +32,78 @@ def _run(argv: list[str], cwd: Path) -> str:
 
 _PR_URL = re.compile(
     r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$")
+_HEAD_OID = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def _pull_request_url(url: str) -> str:
+    url = (url or "").strip()
+    if not _PR_URL.fullmatch(url):
+        raise PullRequestError("Stored PR URL is not a GitHub pull request")
+    return url
+
+
+def _check_succeeded(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    kind = item.get("__typename")
+    if kind == "CheckRun" or (kind is None and "conclusion" in item):
+        return item.get("status") == "COMPLETED" and item.get("conclusion") == "SUCCESS"
+    if kind == "StatusContext" or (kind is None and "state" in item and "conclusion" not in item):
+        return item.get("state") == "SUCCESS"
+    return False
+
+
+def pull_request_head_if_green(payload: object) -> str:
+    """Return the head SHA when the pull request is open and every check succeeded."""
+    if not isinstance(payload, dict):
+        raise PullRequestError("GitHub did not return pull request JSON")
+    if payload.get("state") != "OPEN":
+        raise PullRequestError(f"Pull request is not open (state={payload.get('state')})")
+    oid = payload.get("headRefOid")
+    if not isinstance(oid, str) or not _HEAD_OID.fullmatch(oid):
+        raise PullRequestError("Pull request head is not a commit SHA")
+    rollup = payload.get("statusCheckRollup")
+    if not isinstance(rollup, list) or not rollup:
+        raise PullRequestError("CI has no successful checks")
+    if not all(_check_succeeded(item) for item in rollup):
+        raise PullRequestError("CI is not green")
+    return oid
+
+
+def github_pull_request_green(url: str) -> str:
+    """Return the head SHA when gh reports the pull request open and every check success."""
+    url = _pull_request_url(url)
+    if not shutil.which("gh"):
+        raise PullRequestError("GitHub CLI (gh) is not installed")
+    raw = _run(["gh", "pr", "view", url, "--json", "state,statusCheckRollup,headRefOid"], Path.cwd())
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PullRequestError("GitHub did not return pull request JSON") from exc
+    return pull_request_head_if_green(payload)
+
+
+def github_merge_pull_request(url: str, head_oid: str) -> None:
+    """Merge now with gh. Does not pass --auto or --admin, and requires a merged result.
+
+    A command that only arms GitHub auto-merge leaves the pull request open, so
+    this raises. It does not disable that flag and does not complete a story.
+    """
+    url = _pull_request_url(url)
+    if not isinstance(head_oid, str) or not _HEAD_OID.fullmatch(head_oid):
+        raise PullRequestError("Pull request head is not a commit SHA")
+    if not shutil.which("gh"):
+        raise PullRequestError("GitHub CLI (gh) is not installed")
+    _run(["gh", "pr", "merge", url, "--merge", "--match-head-commit", head_oid], Path.cwd())
+    try:
+        github_pull_request_merged(url)
+    except PullRequestError as exc:
+        raise PullRequestError("Pull request was not merged") from exc
 
 
 def github_pull_request_merged(url: str) -> None:
     """Raise unless gh reports this pull request merged. Open and closed PRs fail closed."""
-    url = (url or "").strip()
-    if not _PR_URL.fullmatch(url):
-        raise PullRequestError("Stored PR URL is not a GitHub pull request")
+    url = _pull_request_url(url)
     if not shutil.which("gh"):
         raise PullRequestError("GitHub CLI (gh) is not installed")
     raw = _run(["gh", "pr", "view", url, "--json", "state,mergedAt"], Path.cwd())

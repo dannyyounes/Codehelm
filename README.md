@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a published container image, automatic merge, automatic Jira transitions, and a fetched or default exchange rate. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: direct provider APIs, a published container image, automatic Jira transitions, and a fetched or default exchange rate. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -221,7 +221,8 @@ The command is dry-run by default. With `--execute`, CodeHelm verifies that
 the task is `awaiting_pr`, checks the worktree and branch, pushes the branch
 to `origin`, and creates a **draft** GitHub PR via `gh pr create`.
 It records `pr_created` and the returned URL. It does not merge, approve,
-or transition Jira issues. An explicit `jira-transition` command posts one
+or transition Jira issues. `merge-ready` is a separate command and is off
+unless the quality policy sets `auto_merge: true`. An explicit `jira-transition` command posts one
 transition id; a dry run does not call Jira. The scheduler still does not
 transition issues or merge pull requests. Push/PR failures retain
 `awaiting_pr` for manual inspection; retries can require checking for an
@@ -492,7 +493,7 @@ Omitted keys use those defaults. `architecture_cmd` is optional and empty when
 omitted. When `risk_patterns` is omitted or null, a small built-in content
 scanner runs. A configured mapping replaces that set. `risk_patterns: {}`
 turns content scanning off. `gate_runner` defaults to `namespace`.
-`approval_signature` defaults to `off`.
+`approval_signature` defaults to `off`. `auto_merge` defaults to `false`.
 `approval_signers` is a directory of `allowed_signers` and `gpg-public.asc`.
 It is required only when `approval_signature` is `required`.
 `gate_image` is required only when `gate_runner` is `container`; empty or
@@ -584,6 +585,8 @@ the GitHub login and a sha256 digest of the workspace diff. A dry run does
 not call GitHub. Later scoring does not call `gh` again. A later change
 makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored.
 
+`merge-ready` merges the recorded pull request only when `auto_merge` is `true`, the fresh decision is `ready_for_pr` because human approval was required and is present, and `gh` reports the pull request open with every check `SUCCESS`. A dry run does not call GitHub. `--execute` uses `gh pr merge --merge --match-head-commit` and does not pass `--auto` or `--admin`. If that command leaves the pull request open, including by arming GitHub auto-merge, CodeHelm reports failure and does not turn the flag off. The story stays incomplete until `schedule-complete` sees `MERGED`. The scheduler never calls `merge-ready`.
+
 The signed bytes are the `sha256:` digest with no added newline. SSH uses `ssh-keygen -Y sign -n codehelm` and an `allowed_signers` file whose principal is the GitHub login. GPG uses a detached signature and `gpg-public.asc`. The key user id must be that login, or an email whose local part is that login. Scoring does not fetch keys and does not open the default GnuPG home. A signature that does not verify does not count.
 
 `docs-exception --execute` records a passing docs row for the current attempt
@@ -618,7 +621,7 @@ when a human records that finding text and a nonempty reason. More than one
 debt can be recorded. It does not
 waive tests, security, review, architecture, docs, acceptance, or human
 approval. A debt from another attempt does not count, and a debt whose text
-does not match a finding is ignored. Current limits: signed approval stays off until `approval_signature` is `required`. The
+does not match a finding is ignored. Current limits: signed approval stays off until `approval_signature` is `required`. `auto_merge` stays off until it is set to `true`, and it still does not merge when human approval was not required or when any check is missing, pending, skipped, or failed. The
 container runner is optional, off by default, and fails closed when selected
 but unavailable. A passing test exit code still does not verify an unnamed
 acceptance criterion. Architecture review is a second model prompt, not a
