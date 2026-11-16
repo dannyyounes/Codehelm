@@ -2,6 +2,7 @@
 import email
 import io
 import json
+import re
 import sqlite3
 import subprocess
 import urllib.error
@@ -429,13 +430,22 @@ def test_dry_runs_do_not_call_the_network(tmp_path, monkeypatch):
 
 
 def test_transport_choices_default_to_cli():
+    from typer.main import get_command
+
+    click_app = get_command(app)
     runner = CliRunner()
     for command in ("run", "agent-run", "schedule", "schedule-durable"):
+        param = next(item for item in click_app.commands[command].params if item.name == "transport")
+        assert param.opts == ["--transport"]
+        assert param.default.value == "cli"
+        assert {item.value for item in param.type_descriptor.annotation} == {"cli", "http"}
         result = runner.invoke(app, [command, "--help"])
         assert result.exit_code == 0, result.output
-        assert "--transport" in result.output
-        assert "cli|http" in result.output
-        assert "default: cli" in result.output
+        # GitHub Actions forces a color terminal, which can put an ANSI code between the dashes.
+        text = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "--transport" in text
+        assert "cli|http" in text
+        assert "default: cli" in text
     rejected = runner.invoke(app, [
         "run", "--jira", "DEV-1", "--prompt", "Fix", "--transport", "ssh"])
     assert rejected.exit_code != 0
