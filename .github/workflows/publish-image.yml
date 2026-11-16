@@ -1,0 +1,45 @@
+name: Publish gate image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        run: |
+          image="ghcr.io/dannyyounes/codehelm"
+          tag="${image}:sha-${GITHUB_SHA}"
+          docker build -f Dockerfile -t "$tag" .
+          docker push "$tag"
+          case "$GITHUB_REF" in
+            refs/tags/v*)
+              docker tag "$tag" "${image}:${GITHUB_REF_NAME}"
+              docker push "${image}:${GITHUB_REF_NAME}"
+              ;;
+          esac
+          digest="$(docker image inspect --format '{{index .RepoDigests 0}}' "$tag")"
+          case "$digest" in
+            ghcr.io/dannyyounes/codehelm@sha256:*) ;;
+            *) echo "Publish did not return a GHCR digest" >&2; exit 1 ;;
+          esac
+          {
+            echo "Pin gate_image to this digest. CodeHelm does not pull it."
+            echo "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"
