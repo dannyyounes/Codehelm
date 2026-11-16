@@ -22,6 +22,7 @@ from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
 from codehelm.quality.contract import assess, decision_error, load_policy, task_attempt
 from codehelm.quality.diffdigest import diff_digest
+from codehelm.quality.signatures import signature_blob, verify_approval_signature
 
 app = typer.Typer(help="CodeHelm: autonomous engineering orchestrator (early scaffold).")
 STATE_DIR = Path(".codehelm")
@@ -849,13 +850,30 @@ def quality_eval(
 def quality_approve(
     task_id: str,
     approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
+    signature_file: Path | None = typer.Option(None, help="SSH or GPG signature over the diff digest"),
+    signature_kind: str = typer.Option("", help="ssh or gpg, required with --signature-file"),
     execute: bool = typer.Option(False, help="Record approval as the authenticated GitHub user"),
 ) -> None:
     """Record high-risk approval as the GitHub login and a digest of the workspace diff."""
+    try:
+        policy = load_policy(STATE_DIR / "quality.yaml")
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if not execute:
-        typer.echo("Dry run. Add --execute to record approval as the authenticated GitHub login.")
+        extra = ""
+        if policy.approval_signature == "required":
+            extra = " This policy requires an SSH or GPG signature over the diff digest."
+        typer.echo(
+            "Dry run. Add --execute to record approval as the authenticated GitHub login." + extra)
         return
     try:
+        if (signature_file is None) != (not signature_kind):
+            raise ValueError("Approval signature requires both --signature-file and --signature-kind")
+        if policy.approval_signature == "required" and signature_file is None:
+            raise ValueError("Human approval requires an SSH or GPG signature")
+        if signature_file is not None and not policy.approval_signers.strip():
+            raise ValueError("approval_signers is not configured")
         login = github_user_login()
         if approver.strip() != login:
             raise PullRequestError(
@@ -867,9 +885,19 @@ def quality_approve(
         digest = diff_digest(workspace) if workspace is not None and workspace.is_dir() else ""
         if workspace is None or not workspace.is_dir() or not digest:
             raise ValueError("Human approval requires a workspace diff digest")
+        stored_signature = ""
+        if signature_file is not None:
+            text = signature_file.read_text(encoding="utf-8")
+            stored_signature = signature_blob(signature_kind, text)
+            signers = Path(policy.approval_signers)
+            if not signers.is_absolute():
+                signers = STATE_DIR / signers
+            if not verify_approval_signature(stored_signature, digest, login, signers):
+                raise ValueError("Approval signature did not verify")
         store.record_evidence(task_id, "human_approval", "human", passed=True,
-                              attempt=task_attempt(task_id), identity=login, detail=digest)
-    except (ValueError, OSError, PullRequestError) as exc:
+                              attempt=task_attempt(task_id), identity=login, detail=digest,
+                              signature=stored_signature)
+    except (ValueError, OSError, PullRequestError, UnicodeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Recorded approval by {login} for {task_id}. Re-evaluate before advancing.")
