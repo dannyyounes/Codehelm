@@ -58,7 +58,7 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 | Acceptance criteria | `quality-attest` (`source=human`) or a `CODEHELM_ACCEPTANCE` line captured from the test process (`source=test_report`) | A passing exit code alone verifies nothing. A report file is used only when that process creates or changes it |
 | Human approval | `quality-approve` (`source=human`, identity is the `gh api user` login, detail is a sha256 digest of the workspace diff) | A typed name that is not that login is refused. A later change makes that approval not count. It is not a cryptographic signature of the person. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` (`source=human`, detail is the finding, identity is the reason, passed) | Accepts one matching unresolved finding on the current attempt. A debt from another attempt does not count. A debt whose text does not match a finding is ignored. It does not waive tests, security, review, architecture, docs, acceptance, or human approval |
-| Oversized justification | stored justification (`source=human`) | Operator attestation, not authenticated |
+| Oversized justification | `quality-justify` records the GitHub login and the reason (`source=human`, identity is the login, detail is the reason) | A dry run does not call GitHub. A row with no identity does not count. Later scoring does not call GitHub again |
 
 `record_evidence` rejects any other source, including an agent-supplied JSON document. Outcomes are appended to `quality_evaluations` and copied onto the task and, from `schedule-quality --execute`, the dispatch row.
 
