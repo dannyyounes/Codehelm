@@ -4,8 +4,9 @@ A successful agent exit stops at awaiting_validation. Test, security, review,
 documentation and post-documentation gates are explicit later commands.
 When `.codehelm/quality.yaml` is present, the durable scheduler can run those
 gates itself. Recorded evidence then decides blocked, awaiting_human_approval
-or ready_for_pr before a pull request. Acceptance and human approval stay
-operator attestations.
+or ready_for_pr before a pull request. Acceptance is a test-report line or an
+operator attestation. Human approval is the GitHub login recorded by
+quality-approve.
 """
 from collections.abc import Callable
 from dataclasses import dataclass

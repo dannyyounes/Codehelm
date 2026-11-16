@@ -282,6 +282,40 @@ def test_high_risk_change_requires_human_approval(tmp_path):
     assert scheduler.snapshot()["S1"][0] == "ready_for_pr"
 
 
+def test_cli_approval_matches_github_login_before_ready_for_pr(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    repo = make_repo(tmp_path / "repo")
+    state = tmp_path / ".codehelm"
+    state.mkdir()
+    database = state / "state.db"
+    write_policy(database)
+    (repo / "src").mkdir()
+    (repo / "src" / "feature.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / "migrations").mkdir()
+    (repo / "migrations" / "001.sql").write_text("CREATE TABLE t(id INT);\n", encoding="utf-8")
+    scheduler = scheduler_for(database)
+    scheduler.claim(DispatchBudget())
+    scheduler.finish("S1", "awaiting_validation")
+    task_id = "DEV-S1-A1"
+    scheduler.store.transition(task_id, "awaiting_validation", provider="claude", workspace=str(repo))
+    scheduler.store.replace_plan_criteria(task_id, 1, ["Works"])
+    engine = LifecycleEngine(repo, database)
+    drive_verified_gates(engine, task_id)
+    assert scheduler.apply_quality("S1") == "awaiting_human_approval"
+    with patch("codehelm.cli.main.github_user_login", return_value="dannyyounes"):
+        denied = CliRunner().invoke(
+            app, ["quality-approve", task_id, "--approver", "other", "--execute"])
+    assert denied.exit_code == 1
+    assert scheduler.apply_quality("S1") == "awaiting_human_approval"
+    with patch("codehelm.cli.main.github_user_login", return_value="dannyyounes"):
+        allowed = CliRunner().invoke(
+            app, ["quality-approve", task_id, "--approver", "dannyyounes", "--execute"])
+    assert allowed.exit_code == 0, allowed.output
+    assert scheduler.apply_quality("S1") == "ready_for_pr"
+    approval = [row for row in engine.store.evidence_for(task_id, 1) if row.gate == "human_approval"]
+    assert [(row.source, row.identity, row.passed) for row in approval] == [("human", "dannyyounes", True)]
+
+
 def test_oversized_change_blocks_until_justification(tmp_path):
     repo = make_repo(tmp_path / "repo")
     database = tmp_path / "state.db"

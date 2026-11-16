@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container sandbox, authenticated approvals, automatic merge or Jira transitions, live usage capture, and a quality-debt register. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container sandbox, automatic merge or Jira transitions, live usage capture, and a quality-debt register. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -271,7 +271,8 @@ created; inspect Jira before retrying. Live Jira operations have not
 been exercised by automated tests.
 
 Later milestones add durable scheduling and bounded execution. Publication
-mappings, role assignment, and authenticated approval checkpoints are still absent.
+mappings and role assignment are still absent. High-risk approval is the
+authenticated GitHub login recorded by `quality-approve`.
 
 ## Dependency-aware multi-agent dispatch (v1.1)
 
@@ -466,7 +467,8 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Documentation | Documentation-agent file check | A real workspace check |
 | Diff size and risk paths | `git` numstat plus policy globs | Repository state |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
-| Human approval and oversized-change justification | Operator attestation via `quality-approve` or a recorded justification | Not authenticated and not signed |
+| Human approval | `quality-approve` records the login from `gh api user` | Checked when the row is written. Not a signature of the diff, and not re-checked on later scoring |
+| Oversized-change justification | Operator attestation | Not authenticated |
 
 A test verifies one criterion only by emitting this line on stdout or stderr, or by creating or changing `.codehelm/acceptance-report.txt` in the workspace while it runs:
 
@@ -503,7 +505,7 @@ codehelm document PLAN-S1-A1 --provider claude --execute
 codehelm quality-attest PLAN-S1-A1 --criterion "Works" --execute
 codehelm validate-after-docs PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
 codehelm schedule-quality S1 --plan-file .codehelm/plan.json --prefix PLAN --execute
-codehelm quality-approve PLAN-S1-A1 --approver "Your Name" --execute
+codehelm quality-approve PLAN-S1-A1 --approver YOUR_GITHUB_LOGIN --execute
 ```
 
 `schedule-durable --execute` runs the gate commands and model reviews once per
@@ -513,7 +515,13 @@ or the reviewer. It only reads evidence those commands already recorded.
 Missing evidence blocks the story. Re-scoring after `quality-attest` or
 `quality-approve` does not spend another reviewer call.
 
-Current limits: no quality-debt register, no signed approval, no container
-sandbox around the gate commands, and no automatic proof that each acceptance
-criterion was exercised. Architecture review is a second model prompt, not a
-separate deterministic checker. Budgets remain estimates, not spend protection.
+`quality-approve --execute` asks `gh api user` for the current login and
+records that login only when `--approver` matches it exactly. A dry run does
+not call GitHub. Later scoring trusts the stored row and does not call `gh`
+again. The row is not a signature of the diff.
+
+Current limits: no quality-debt register, no signed approval, and no container
+sandbox around the gate commands. A passing test exit code still does not
+verify an unnamed acceptance criterion. Architecture review is a second model
+prompt, not a separate deterministic checker. Budgets remain estimates, not
+spend protection.

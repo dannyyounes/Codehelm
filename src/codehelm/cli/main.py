@@ -7,7 +7,7 @@ import yaml
 from codehelm.execution.worktrees import WorktreeManager, WorktreeError
 from codehelm.providers.adapters import CLIProvider, ProviderError, provider_names
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
-from codehelm.integrations.github_pr import PullRequestError
+from codehelm.integrations.github_pr import PullRequestError, github_user_login
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
 from codehelm.orchestrator.durable import DurableScheduler, DispatchBudget
@@ -716,22 +716,26 @@ def quality_eval(
 @app.command("quality-approve")
 def quality_approve(
     task_id: str,
-    approver: str = typer.Option(..., help="Person granting approval; not cryptographically verified"),
-    execute: bool = typer.Option(False, help="Record an operator approval attestation"),
+    approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
+    execute: bool = typer.Option(False, help="Record approval as the authenticated GitHub user"),
 ) -> None:
-    """Record human approval for high-risk changes. Re-run quality evaluation afterwards."""
+    """Record high-risk approval as the login returned by the authenticated gh CLI."""
     if not execute:
-        typer.echo("Dry run. Add --execute to record approval. This does not authenticate the approver.")
+        typer.echo("Dry run. Add --execute to record approval as the authenticated GitHub login.")
         return
     try:
+        login = github_user_login()
+        if approver.strip() != login:
+            raise PullRequestError(
+                f"Approver {approver.strip()!r} does not match authenticated GitHub login {login!r}")
         store = TaskStore(STATE_DIR / "state.db")
         store.initialize()
         store.record_evidence(task_id, "human_approval", "human", passed=True,
-                              attempt=task_attempt(task_id), identity=approver)
-    except (ValueError, OSError) as exc:
+                              attempt=task_attempt(task_id), identity=login)
+    except (ValueError, OSError, PullRequestError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Recorded approval by {approver} for {task_id}. Re-evaluate before advancing.")
+    typer.echo(f"Recorded approval by {login} for {task_id}. Re-evaluate before advancing.")
 
 
 @app.command("quality-attest")

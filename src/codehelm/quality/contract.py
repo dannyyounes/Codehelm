@@ -4,8 +4,9 @@ Agent-written evidence JSON is not accepted. Test, security, review, documentati
 and diff inputs come from rows the orchestrator stored after running those checks,
 or from git. A passing test exit code does not verify acceptance criteria. A
 criterion counts only when the test process the orchestrator ran emits a
-CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval and
-oversized-change justification stay operator attestations.
+CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval is the
+GitHub login captured when quality-approve ran. It is not a signature of the
+diff. Oversized-change justification stays an operator attestation.
 """
 from dataclasses import dataclass, field
 from pathlib import Path

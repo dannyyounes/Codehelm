@@ -56,13 +56,14 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 | Documentation | documentation agent file-hash check | Process result |
 | Diff size and risk paths | `git` status/diff plus policy globs | Repository state |
 | Acceptance criteria | `quality-attest` (`source=human`) or a `CODEHELM_ACCEPTANCE` line captured from the test process (`source=test_report`) | A passing exit code alone verifies nothing. A report file is used only when that process creates or changes it |
-| Human approval, oversized justification | `quality-approve` or a stored justification | Operator attestation, not authenticated |
+| Human approval | `quality-approve` (`source=human`, identity is the `gh api user` login) | Checked at record time. A typed name that is not that login is refused. Later scoring does not call GitHub again |
+| Oversized justification | stored justification (`source=human`) | Operator attestation, not authenticated |
 
 `record_evidence` rejects any other source, including an agent-supplied JSON document. Outcomes are appended to `quality_evaluations` and copied onto the task and, from `schedule-quality --execute`, the dispatch row.
 
 `schedule-quality` still refuses an interrupted story. Resuming it first re-claims the same attempt; `schedule-retry` starts a new attempt, and only that new attempt's rows count.
 
-High-risk classification is path-glob only. A risky change outside those globs is not detected unless an operator records a `risk` row. There is no quality-debt register, no signed approval, and no sandbox around the commands the policy runs. Architecture review reuses the independent-review function with a different prompt; it is a second model verdict. `max_retries` on the policy is not a second retry loop. `DispatchBudget` remains the enforced attempt cap.
+High-risk classification is path-glob only. A risky change outside those globs is not detected unless an operator records a `risk` row. `quality-approve --execute` stores the authenticated GitHub login; it does not sign the diff, and evaluation does not repeat the GitHub call. There is no quality-debt register and no sandbox around the commands the policy runs. Architecture review reuses the independent-review function with a different prompt; it is a second model verdict. `max_retries` on the policy is not a second retry loop. `DispatchBudget` remains the enforced attempt cap.
 
 ## Budgets and provider use
 
