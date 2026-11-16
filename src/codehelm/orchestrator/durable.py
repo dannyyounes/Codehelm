@@ -255,7 +255,8 @@ class DurableScheduler:
 
         The coding agent is started only when this attempt has no task row yet.
         Gate commands and model reviews that already passed for the attempt are
-        not repeated. Acceptance criteria are not inferred from a green test run.
+        not repeated. A green test exit code does not verify acceptance criteria.
+        Only a CODEHELM_ACCEPTANCE line from that test process does.
         """
         snapshot = self.snapshot()
         if story_id not in snapshot:

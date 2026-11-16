@@ -565,6 +565,42 @@ def test_cli_resumes_interrupted_quality_pass(tmp_path, monkeypatch):
     assert BudgetLedger(database).report("DEV")["entries"] == 1
 
 
+def test_acceptance_line_reaches_ready_for_pr_without_attestation(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    database = tmp_path / "state.db"
+    write_policy(database)
+    scheduler = scheduler_for(database)
+    engine = LifecycleEngine(repo, database)
+    assert admit(scheduler) == ["S1"]
+    command = ["python", "-c", "print('CODEHELM_ACCEPTANCE\\tWorks\\tpassed')"]
+    status, _coder, _reviewer, _docs = carry(scheduler, engine, test_command=command)
+    assert status == "ready_for_pr"
+    rows = [row for row in engine.store.evidence_for("DEV-S1-A1", 1)
+            if row.gate == "acceptance" and row.source == "test_report"]
+    assert rows and all(row.passed and row.detail == "Works" for row in rows)
+    assert "unverified_acceptance_criteria" not in engine.store.latest_evaluation("DEV-S1-A1", 1)["failures"]
+
+
+def test_unnamed_criterion_blocks_the_durable_wave(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    database = tmp_path / "state.db"
+    write_policy(database)
+    raw = json.dumps({
+        "epic_title": "Feature", "epic_description": "Build it",
+        "stories": [{
+            "id": "S1", "title": "Story 1", "description": "Build it",
+            "acceptance_criteria": ["Works", "Stays up"], "dependencies": [],
+        }],
+    })
+    scheduler = scheduler_for(database, raw)
+    engine = LifecycleEngine(repo, database)
+    assert admit(scheduler) == ["S1"]
+    command = ["python", "-c", "print('CODEHELM_ACCEPTANCE\\tWorks\\tpassed')"]
+    status, _coder, _reviewer, _docs = carry(scheduler, engine, test_command=command)
+    assert status == "blocked"
+    assert "unverified_acceptance_criteria" in engine.store.latest_evaluation("DEV-S1-A1", 1)["failures"]
+
+
 def test_schedule_quality_does_not_rerun_checks(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     plan = tmp_path / "plan.json"

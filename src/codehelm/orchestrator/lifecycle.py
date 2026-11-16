@@ -17,7 +17,8 @@ from codehelm.execution.worktrees import WorktreeManager
 from codehelm.providers.adapters import CLIProvider, AgentResult
 from codehelm.quality.gates import GateResult, command_gate, independent_review
 from codehelm.quality.contract import (
-    assess, decision_error, load_policy, policy_path_for, task_attempt,
+    assess, decision_error, load_policy, parse_acceptance_report, policy_path_for,
+    read_acceptance_report, task_attempt,
 )
 from codehelm.agents.documentation import run_documentation_agent
 from codehelm.integrations.github_pr import publish_pr
@@ -30,7 +31,7 @@ _EVIDENCE_SOURCES = {
     "review": {"independent_review"},
     "architecture": {"independent_review"},
     "docs": {"documentation_agent"},
-    "acceptance": {"human"},
+    "acceptance": {"human", "test_report"},
     "acceptance_planned": {"plan"},
     "human_approval": {"human"},
     "oversized_justification": {"human"},
@@ -312,6 +313,37 @@ class LifecycleEngine:
     def _attempt_of(self, task_id: str, attempt: int | None) -> int:
         return task_attempt(task_id) if attempt is None else attempt
 
+    def _run_named_command(self, task_id: str, attempt: int, workspace: Path, gate: str,
+                           command: list[str], timeout: int, status: str) -> GateResult:
+        report_before = read_acceptance_report(workspace) if gate == "tests" else None
+        self.store.transition(task_id, status)
+        result = command_gate(workspace, list(command), timeout)
+        detail = f"argv={list(command)!r}\n{result.detail}"
+        self._record_gate(task_id, attempt, gate, "command_gate",
+                          GateResult(result.passed, detail, result.exit_code))
+        if gate == "tests":
+            self._record_test_acceptance(task_id, attempt, workspace, result, report_before)
+        return result
+
+    def _record_test_acceptance(self, task_id: str, attempt: int, workspace: Path,
+                                result: GateResult, report_before: str | None) -> None:
+        """Record criteria the test process named. A green exit code names none."""
+        file_text = ""
+        report_after = read_acceptance_report(workspace)
+        if report_after is not None and report_after != report_before:
+            file_text = report_after
+        named = parse_acceptance_report(result.detail)
+        for criterion, ok in parse_acceptance_report(file_text).items():
+            if criterion in named:
+                named[criterion] = named[criterion] and ok
+            else:
+                named[criterion] = ok
+        suite_passed = bool(result.passed and result.exit_code == 0)
+        for criterion, ok in named.items():
+            self.store.record_evidence(
+                task_id, "acceptance", "test_report", passed=bool(suite_passed and ok),
+                attempt=attempt, detail=criterion)
+
     def _record_gate(self, task_id: str, attempt: int, gate: str, source: str,
                      result: GateResult, identity: str = "") -> None:
         self.store.record_evidence(
@@ -361,11 +393,8 @@ class LifecycleEngine:
             self.store.transition(task_id, "blocked", error="Workspace missing")
             return False
         for gate, command in (("tests", test_command), ("security", security_command)):
-            self.store.transition(task_id, f"validating_{gate}")
-            result = command_gate(workspace, command, timeout)
-            detail = f"argv={command!r}\n{result.detail}"
-            self._record_gate(task_id, attempt, gate, "command_gate",
-                              GateResult(result.passed, detail, result.exit_code))
+            result = self._run_named_command(
+                task_id, attempt, workspace, gate, command, timeout, f"validating_{gate}")
             if not result.passed:
                 self.store.transition(task_id, "blocked", error=f"{gate}: {result.detail}"[:2000])
                 return False
@@ -431,11 +460,8 @@ class LifecycleEngine:
             return False
         for gate, label, command in (("tests", "post_docs_tests", test_command),
                                      ("security", "post_docs_security", security_command)):
-            self.store.transition(task_id, f"validating_{label}")
-            result = command_gate(workspace, command, timeout)
-            detail = f"argv={command!r}\n{result.detail}"
-            self._record_gate(task_id, attempt, gate, "command_gate",
-                              GateResult(result.passed, detail, result.exit_code))
+            result = self._run_named_command(
+                task_id, attempt, workspace, gate, command, timeout, f"validating_{label}")
             if not result.passed:
                 self.store.transition(task_id, "blocked", error=f"{label}: {result.detail}"[:2000])
                 return False
@@ -555,12 +581,9 @@ class LifecycleEngine:
                                 docs_timeout: int, implementer: str) -> None:
         if kind == "command":
             label = f"post_docs_{gate}" if post else gate
-            self.store.transition(task_id, f"validating_{label}")
             command = list(test_command if gate == "tests" else security_command)
-            result = command_gate(workspace, command, timeout)
-            detail = f"argv={command!r}\n{result.detail}"
-            self._record_gate(task_id, attempt, gate, "command_gate",
-                              GateResult(result.passed, detail, result.exit_code))
+            self._run_named_command(
+                task_id, attempt, workspace, gate, command, timeout, f"validating_{label}")
             return
         if kind == "docs":
             self.store.transition(task_id, "documenting")
