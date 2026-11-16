@@ -81,3 +81,31 @@ class BudgetLedger:
                 AND status='reserved'""", (tokens,str(usd),prefix,task_id))
             if changed.rowcount != 1:
                 raise ValueError("No outstanding reservation for this task")
+
+    def observe(self, prefix: str, task_id: str, tokens: int,
+                usd: Decimal | None) -> None:
+        """Record recognized usage against an existing reservation.
+
+        A missing USD amount stays NULL and the row stays reserved. It is not
+        stored as zero. No matching reserved row means nothing is inserted.
+        """
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise ValueError("Actual usage must be nonnegative and finite")
+        if usd is not None and (
+            not isinstance(usd, Decimal) or not usd.is_finite() or usd < 0
+        ):
+            raise ValueError("Actual usage must be nonnegative and finite")
+        with sqlite3.connect(self.database) as db:
+            if usd is None:
+                changed = db.execute(
+                    """UPDATE budget_reservations SET actual_tokens=?
+                       WHERE prefix=? AND task_id=? AND status='reserved'""",
+                    (tokens, prefix, task_id))
+            else:
+                changed = db.execute(
+                    """UPDATE budget_reservations SET actual_tokens=?,
+                       actual_usd=?,status='reconciled' WHERE prefix=? AND task_id=?
+                       AND status='reserved'""",
+                    (tokens, str(usd), prefix, task_id))
+            if changed.rowcount != 1:
+                raise ValueError("No outstanding reservation for this task")

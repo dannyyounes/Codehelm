@@ -230,7 +230,11 @@ def usage_import(
         if usage is None:
             raise ValueError("Unrecognized or incomplete provider usage JSON")
         if usage.usd is None:
-            typer.echo(f"Tokens: {usage.tokens}; USD cost unavailable. Reservation retained.")
+            if execute:
+                BudgetLedger(STATE_DIR / "state.db").observe(
+                    prefix, task_id, usage.tokens, None)
+            typer.echo(
+                f"Tokens: {usage.tokens}; USD is unavailable and the reservation is retained.")
             return
         if not execute:
             typer.echo(f"Verified JSON reports {usage.tokens} tokens and USD {usage.usd}. "
