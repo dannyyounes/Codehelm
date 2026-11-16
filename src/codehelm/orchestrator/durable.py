@@ -162,12 +162,17 @@ class DurableScheduler:
             for story in ready[:max(0, capacity)]:
                 if tokens_used + reserve_tokens > limits.tokens or dollars_used + amount > limits.usd:
                     break
+                attempt = rows[story.id][1] + 1
+                task_id = f"{self.prefix}-{story.id}-A{attempt}"
+                override_id = None
                 if monthly_budget is not None and (
                     monthly_used + aud_amount > monthly_budget.cap_aud or
                     epic_used + aud_amount > monthly_budget.epic_cap_aud):
-                    break
-                attempt = rows[story.id][1] + 1
-                task_id = f"{self.prefix}-{story.id}-A{attempt}"
+                    from codehelm.orchestrator.monthly_budget import _matching_override
+                    override_id = _matching_override(
+                        db, task_id, self.prefix, month, aud_amount)
+                    if override_id is None:
+                        break
                 db.execute("""INSERT INTO budget_reservations
                     (prefix,task_id,provider,reserved_tokens,reserved_usd,status,created_at)
                     VALUES (?,?,?,?,?,'reserved',?)""",
@@ -182,6 +187,13 @@ class DurableScheduler:
                         (task_id,epic,month,estimated_aud,charge_type,created_at)
                         VALUES (?,?,?,?,'additional',?)""",
                         (task_id,self.prefix,month,str(aud_amount),now))
+                    if override_id is not None:
+                        updated = db.execute(
+                            """UPDATE budget_overrides SET used_at=?
+                               WHERE id=? AND used_at IS NULL""",
+                            (now, override_id))
+                        if updated.rowcount != 1:
+                            raise ValueError("Budget approval required; new task paused")
                     monthly_used += aud_amount
                     epic_used += aud_amount
                 selected.append(story.id)

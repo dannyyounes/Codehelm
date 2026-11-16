@@ -13,7 +13,8 @@ from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
 from codehelm.orchestrator.durable import DurableScheduler, DispatchBudget, resolve_max_attempts
 from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
-from codehelm.orchestrator.monthly_budget import MonthlyBudget, MonthlyPolicy
+from codehelm.orchestrator.monthly_budget import (
+    MonthlyBudget, MonthlyPolicy, parse_override_amount)
 from decimal import Decimal
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
@@ -178,6 +179,39 @@ def pr_create(
 def monthly_budget_status(month: str = typer.Option(None)) -> None:
     """Show additional AUD charge allowance, excluding existing subscriptions."""
     typer.echo(str(MonthlyBudget(STATE_DIR / "state.db").status(month)))
+
+
+@app.command("budget-approve")
+def budget_approve(
+    task_id: str,
+    epic: str = typer.Option(..., help="Epic this one-shot override applies to"),
+    amount: str = typer.Option(..., help="Exact additional AUD amount to authorize once"),
+    approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
+    reason: str = typer.Option(..., help="Why this one reservation may pass the cap"),
+    execute: bool = typer.Option(False, help="Record the override after checking the GitHub login"),
+) -> None:
+    """Record a GitHub login and a reason for one exact task, epic, and amount."""
+    try:
+        parsed = parse_override_amount(amount)
+        if not reason.strip():
+            raise ValueError("Budget override reason is required")
+        if not task_id.strip() or not epic.strip():
+            raise ValueError("Invalid budget override")
+        if not execute:
+            typer.echo(
+                "Dry run. Add --execute to record a one-shot budget override "
+                "for this task, epic, and amount. GitHub is not called.")
+            return
+        login = github_user_login()
+        if approver.strip() != login:
+            raise PullRequestError(
+                f"Approver {approver.strip()!r} does not match authenticated GitHub login {login!r}")
+        MonthlyBudget(STATE_DIR / "state.db").record_override(
+            task_id, epic, parsed, login, reason.strip())
+    except (ValueError, ArithmeticError, PullRequestError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded budget override by {login} for {task_id}.")
 
 
 @app.command("usage-import")
