@@ -42,9 +42,10 @@ class MonthlyBudget:
                 task_id TEXT PRIMARY KEY, epic TEXT NOT NULL, month TEXT NOT NULL,
                 estimated_aud TEXT NOT NULL, actual_aud TEXT,
                 charge_type TEXT NOT NULL CHECK(charge_type IN ('additional','subscription')),
-                created_at TEXT NOT NULL, rate_aud_per_usd TEXT, rate_source TEXT)""")
+                created_at TEXT NOT NULL, rate_aud_per_usd TEXT, rate_source TEXT,
+                rate_as_of TEXT)""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(aud_reservations)")}
-            for name in ("rate_aud_per_usd", "rate_source"):
+            for name in ("rate_aud_per_usd", "rate_source", "rate_as_of"):
                 if name not in columns:
                     db.execute(f"ALTER TABLE aud_reservations ADD COLUMN {name} TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS budget_overrides (

@@ -68,4 +68,4 @@ High-risk classification uses path globs. When `risk_patterns` is omitted or nul
 
 ## Budgets and provider use
 
-Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply to an explicitly supplied additional-charge estimate, or to a USD amount multiplied by an operator-supplied AUD-per-USD rate and a source label. CodeHelm does not fetch a rate and does not assume one. Do not describe any of these as guaranteed spend protection.
+Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply to an explicitly supplied additional-charge estimate, or to a USD amount multiplied by an operator-supplied AUD-per-USD rate and a source label. `--fetch-aud-rate` is off by default. It reads AUD per USD from frankfurter.app, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. There is no default rate. Do not describe any of these as guaranteed spend protection.

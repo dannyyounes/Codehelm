@@ -79,9 +79,9 @@ def test_claim_stores_the_rate_and_source(tmp_path):
     assert chosen == ["S1"]
     with sqlite3.connect(database) as db:
         row = db.execute(
-            "SELECT estimated_aud, rate_aud_per_usd, rate_source FROM aud_reservations"
+            "SELECT estimated_aud, rate_aud_per_usd, rate_source, rate_as_of FROM aud_reservations"
         ).fetchone()
-    assert row == (str(aud), "1.54", "desk sheet")
+    assert row == (str(aud), "1.54", "desk sheet", None)
 
 
 def test_schedule_dry_run_quotes_without_a_reservation(tmp_path, monkeypatch):

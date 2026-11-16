@@ -20,8 +20,8 @@ from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
 from codehelm.orchestrator.monthly_budget import (
     MonthlyBudget, MonthlyPolicy, parse_override_amount)
-from codehelm.orchestrator.fx import resolve_additional_aud
-from decimal import Decimal
+from codehelm.orchestrator.fx import FRANKFURTER_SOURCE, fetch_aud_per_usd, resolve_additional_aud
+from decimal import Decimal, InvalidOperation
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
 from codehelm.quality.contract import assess, auto_merge_block, decision_error, load_policy, task_attempt
@@ -199,16 +199,25 @@ def pr_create(
 @app.command("aud-quote")
 def aud_quote(
     usd: str = typer.Argument(..., help="Positive USD amount to convert"),
-    aud_per_usd: str = typer.Option(..., help="Operator-supplied AUD per 1 USD"),
-    rate_source: str = typer.Option(..., help="Where this rate came from; CodeHelm does not fetch one"),
+    aud_per_usd: str | None = typer.Option(None, help="Operator-supplied AUD per 1 USD"),
+    rate_source: str = typer.Option("", help="Where this rate came from; this flag does not fetch one"),
+    fetch_aud_rate: bool = typer.Option(False, "--fetch-aud-rate", help="Fetch AUD per USD from frankfurter.app; no default rate"),
 ) -> None:
-    """Show an AUD amount from an explicit rate. Nothing is stored."""
+    """Show an AUD amount. Nothing is stored."""
     try:
-        aud, rate, source = resolve_additional_aud("0", usd, aud_per_usd, rate_source)
+        as_of = None
+        if fetch_aud_rate:
+            if aud_per_usd is not None or rate_source.strip():
+                raise ValueError("A fetched AUD rate cannot be combined with a supplied rate")
+            fetched, source, as_of = fetch_aud_per_usd()
+            aud, rate, source = resolve_additional_aud("0", usd, str(fetched), source)
+        else:
+            aud, rate, source = resolve_additional_aud("0", usd, aud_per_usd, rate_source)
     except (ValueError, ArithmeticError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"{Decimal(usd)} USD * {rate} = {aud} AUD (source: {source}). Not recorded.")
+    when = f", as of {as_of}" if as_of else ""
+    typer.echo(f"{Decimal(usd)} USD * {rate} = {aud} AUD (source: {source}{when}). Not recorded.")
 
 @app.command("merge-ready")
 def merge_ready(
@@ -393,7 +402,8 @@ def schedule_durable(
     additional_aud_per_task: str = typer.Option("0", help="Estimated additional AUD charge per task; subscription-only=0"),
     additional_usd: str | None = typer.Option(None, help="USD amount to convert into the AUD reservation"),
     aud_per_usd: str | None = typer.Option(None, help="Operator-supplied AUD per 1 USD; no default rate"),
-    aud_rate_source: str = typer.Option("", help="Label for the supplied rate; CodeHelm does not fetch one"),
+    aud_rate_source: str = typer.Option("", help="Label for the supplied rate; this flag does not fetch one"),
+    fetch_aud_rate: bool = typer.Option(False, "--fetch-aud-rate", help="Fetch AUD per USD from frankfurter.app; no default rate"),
     reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
     test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
     security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
@@ -408,11 +418,28 @@ def schedule_durable(
         policy = load_policy(STATE_DIR / "quality.yaml")
         budget = DispatchBudget(
             resolve_max_attempts(policy, max_attempts), max_total_attempts, max_parallel)
-        aud_amount, aud_rate, aud_source = resolve_additional_aud(
-            additional_aud_per_task, additional_usd, aud_per_usd, aud_rate_source)
+        if fetch_aud_rate and (aud_per_usd is not None or aud_rate_source.strip()):
+            raise ValueError("A fetched AUD rate cannot be combined with a supplied rate")
+        if fetch_aud_rate:
+            try:
+                direct_aud = Decimal(str(additional_aud_per_task).strip())
+            except (InvalidOperation, ValueError, ArithmeticError) as exc:
+                raise ValueError("Invalid AUD reservation") from exc
+            if direct_aud != 0:
+                raise ValueError("A fetched AUD rate cannot be combined with a direct AUD amount")
+            if additional_usd is None:
+                raise ValueError("A fetched AUD rate requires a USD amount")
+        aud_as_of = None
+        if not fetch_aud_rate:
+            aud_amount, aud_rate, aud_source = resolve_additional_aud(
+                additional_aud_per_task, additional_usd, aud_per_usd, aud_rate_source)
         if not execute:
             typer.echo(f"Durable state: {scheduler.snapshot()}")
-            if aud_rate is not None:
+            if fetch_aud_rate:
+                typer.echo(
+                    f"Would fetch the AUD-per-USD rate from {FRANKFURTER_SOURCE} "
+                    f"for {additional_usd} USD. Not recorded.")
+            elif aud_rate is not None:
                 typer.echo(
                     f"Would reserve {aud_amount} AUD from {additional_usd} USD "
                     f"at {aud_rate} ({aud_source}). Not recorded.")
@@ -423,16 +450,22 @@ def schedule_durable(
         if policy.present and (policy.require_review or policy.require_architecture):
             if not reviewer or reviewer == provider:
                 raise ValueError("Quality policy requires --reviewer set to a different provider")
+        if fetch_aud_rate:
+            fetched, aud_source, aud_as_of = fetch_aud_per_usd()
+            aud_amount, aud_rate, aud_source = resolve_additional_aud(
+                "0", additional_usd, str(fetched), aud_source)
         if aud_rate is not None:
+            when = f", as of {aud_as_of}" if aud_as_of else ""
             typer.echo(
                 f"AUD reservation {aud_amount} from {additional_usd} USD "
-                f"at {aud_rate} ({aud_source}).")
+                f"at {aud_rate} ({aud_source}{when}).")
         limits = Limits(limit_tokens, Decimal(limit_usd))
         resumed = scheduler.claim_resumable(budget)
         chosen = scheduler.claim_budgeted(budget, provider, reserve_tokens,
                                           Decimal(reserve_usd), limits,
                                           MonthlyPolicy(), aud_amount,
-                                          aud_rate=aud_rate, aud_rate_source=aud_source)
+                                          aud_rate=aud_rate, aud_rate_source=aud_source,
+                                          aud_rate_as_of=aud_as_of)
         wave = resumed + [sid for sid in chosen if sid not in resumed]
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         stories = {story.id: story for story in plan_obj.stories}
