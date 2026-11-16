@@ -13,7 +13,8 @@ from codehelm.integrations.github_pr import (
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
 from codehelm.orchestrator.durable import (
-    DurableScheduler, DispatchBudget, resolve_max_attempts, parse_resume_task_id,
+    DurableScheduler, DispatchBudget, JiraTransitionError, resolve_max_attempts,
+    parse_resume_task_id,
 )
 from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
@@ -456,6 +457,8 @@ def schedule_durable(
                 return sid, status
             except ClaimLost:
                 return sid, "claimed"
+            except JiraTransitionError as exc:
+                return sid, f"jira_transition_failed: {exc}"
             except Exception as exc:
                 try:
                     scheduler.settle(sid, "failed", str(exc))
@@ -467,8 +470,15 @@ def schedule_durable(
                 heartbeat_thread.join(timeout=2)
         with ThreadPoolExecutor(max_workers=max_parallel) as pool:
             results = list(pool.map(launch, wave))
+        jira_failed = False
         for sid, status in results:
             typer.echo(f"{sid}: {status}")
+            if str(status).startswith("jira_transition_failed"):
+                jira_failed = True
+        for sid, line in scheduler.jira_notes:
+            typer.echo(f"{sid}: {line}")
+        if jira_failed:
+            raise typer.Exit(code=1)
         if not wave:
             typer.echo("No stories eligible under dependencies and budget.")
     except (ValueError, PlanningError, OSError, ArithmeticError) as exc:
@@ -491,6 +501,8 @@ def schedule_complete(
     try:
         scheduler = DurableScheduler(STATE_DIR / "state.db", load_plan(plan_file), prefix)
         scheduler.complete(story_id, human_verified_merge=True)
+        for _sid, line in scheduler.jira_notes:
+            typer.echo(line)
         typer.echo(f"{story_id}: completed; dependent stories may now be scheduled.")
     except (ValueError, PlanningError, OSError, ArithmeticError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -769,7 +781,7 @@ def jira_transition(
     transition_id: str = typer.Option(..., "--id", help="Jira transition id"),
     execute: bool = typer.Option(False, help="Explicitly post one Jira transition"),
 ) -> None:
-    """Post one Jira transition id. The scheduler does not call this."""
+    """Post one Jira transition id. The scheduler uses the same client only when its policy maps that state."""
     if not execute:
         typer.echo(
             f"Dry run: would post transition {transition_id} on {key}. Jira is not called.")
@@ -899,6 +911,8 @@ def schedule_quality(
             typer.echo("Dry run. Add --execute to record the outcome and transition the story.")
             return
         status = scheduler.apply_quality(story_id)
+        for _sid, line in scheduler.jira_notes:
+            typer.echo(line)
     except (ValueError, PlanningError, OSError, KeyError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

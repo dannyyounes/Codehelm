@@ -16,7 +16,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: automatic Jira transitions, and a fetched or default exchange rate. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: a fetched or default exchange rate. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. The scheduler still does not merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -239,8 +239,10 @@ to `origin`, and creates a **draft** GitHub PR via `gh pr create`.
 It records `pr_created` and the returned URL. It does not merge, approve,
 or transition Jira issues. `merge-ready` is a separate command and is off
 unless the quality policy sets `auto_merge: true`. An explicit `jira-transition` command posts one
-transition id; a dry run does not call Jira. The scheduler still does not
-transition issues or merge pull requests. Push/PR failures retain
+transition id; a dry run does not call Jira. The scheduler posts one only when
+`jira_transitions` maps the new state, and that post stays a dry run unless
+`jira_transition_execute` is true. `pr-create` does not transition Jira.
+Push/PR failures retain
 `awaiting_pr` for manual inspection; retries can require checking for an
 existing remote PR.
 
@@ -268,12 +270,17 @@ a Jira issue whose key matches the task ID. It does not change Jira status.
 
 `jira-transition KEY --id TRANSITION_ID` prints a dry-run line that names
 the key and the transition id and does not call Jira. With `--execute` it
-posts that one transition id. The scheduler still does not transition issues
-or merge pull requests.
+posts that one transition id. The scheduler uses that same client only when
+`jira_transitions` maps the new dispatch state to a transition id and the
+story's `jira_key` is set. Omitting the mapping, or setting it to `false`,
+leaves the scheduler off. `jira_transition_execute` defaults to false, so a
+mapped state records a dry run and does not call Jira. A missing key or a
+Jira error is stored as `jira_transition_failed` and reported. The story
+state is not rolled back. The scheduler still does not merge pull requests.
 
 **Limitations:** This is a minimal Jira Cloud REST adapter, not autonomous
-epic decomposition, bulk story scheduling, transition mapping, or a bidirectional
-sync engine. Jira project configurations can differ in supported issue types
+epic decomposition, bulk story scheduling, or a bidirectional
+sync engine. It does not look up Jira's workflow or invent a transition id. Jira project configurations can differ in supported issue types
 and parent relationships. Live Jira credentials and network operations have
 not been exercised by the automated tests. Jira remains optional.
 
@@ -299,8 +306,11 @@ Publishing creates the Jira Epic and its Stories in dependency order,
 including resolved prerequisite issue keys in story descriptions. It does
 not launch agents, create Jira dependency links, transition issues, or
 schedule stories. An explicit `jira-transition` command posts one transition
-id; a dry run does not call Jira. The scheduler still does not transition
-issues or merge pull requests. **Publishing is not idempotent**: re-running can create
+id; a dry run does not call Jira. The scheduler posts one only when
+`jira_transitions` maps the new state and the story has a `jira_key`, and
+that post stays a dry run unless `jira_transition_execute` is true. Publishing
+does not write `jira_key`. The scheduler still does not merge pull requests.
+**Publishing is not idempotent**: re-running can create
 duplicate Jira issues. A partial Jira failure may leave some issues
 created; inspect Jira before retrying. Live Jira operations have not
 been exercised by automated tests.
@@ -510,6 +520,12 @@ omitted. When `risk_patterns` is omitted or null, a small built-in content
 scanner runs. A configured mapping replaces that set. `risk_patterns: {}`
 turns content scanning off. `gate_runner` defaults to `namespace`.
 `approval_signature` defaults to `off`. `auto_merge` defaults to `false`.
+`jira_transitions` defaults to off. A nonempty mapping names the only states
+the scheduler may post: `awaiting_validation`, `failed`, `blocked`,
+`awaiting_human_approval`, `ready_for_pr`, and `completed`. Each value is a
+quoted transition id. `jira_transition_execute` defaults to false and is
+refused without that mapping. The story needs `jira_key` in the plan.
+Publishing a plan does not write that key.
 `approval_signers` is a directory of `allowed_signers` and `gpg-public.asc`.
 It is required only when `approval_signature` is `required`.
 `gate_image` is required only when `gate_runner` is `container`; empty or

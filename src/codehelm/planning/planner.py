@@ -11,6 +11,9 @@ class PlanningError(ValueError):
     pass
 
 
+_JIRA_KEY = re.compile(r"^[A-Z][A-Z0-9]+-[1-9][0-9]*$")
+
+
 @dataclass(frozen=True)
 class Story:
     id: str
@@ -18,6 +21,7 @@ class Story:
     description: str
     acceptance_criteria: tuple[str, ...]
     dependencies: tuple[str, ...]
+    jira_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,8 @@ class Plan:
             "stories": [
                 {"id": s.id, "title": s.title, "description": s.description,
                  "acceptance_criteria": list(s.acceptance_criteria),
-                 "dependencies": list(s.dependencies)}
+                 "dependencies": list(s.dependencies),
+                 **({"jira_key": s.jira_key} if s.jira_key else {})}
                 for s in self.stories
             ],
         }
@@ -77,7 +82,8 @@ def parse_plan(raw: str) -> Plan:
             raise PlanningError(f"{ident}: duplicate dependencies")
         stories.append(Story(ident, nonempty(item.get("title"), "title"),
                              nonempty(item.get("description"), "description"),
-                             tuple(v.strip() for v in criteria), tuple(deps)))
+                             tuple(v.strip() for v in criteria), tuple(deps),
+                             _story_jira_key(item, ident)))
     graph = {s.id: s.dependencies for s in stories}
     visiting, visited = set(), set()
     def visit(node):
@@ -95,6 +101,16 @@ def parse_plan(raw: str) -> Plan:
     for node in graph:
         visit(node)
     return Plan(epic_title, epic_description, tuple(stories))
+
+
+def _story_jira_key(item: dict, ident: str) -> str:
+    """Optional issue key. Publishing does not write this field."""
+    if "jira_key" not in item or item["jira_key"] is None:
+        return ""
+    key = item["jira_key"]
+    if not isinstance(key, str) or not _JIRA_KEY.fullmatch(key):
+        raise PlanningError(f"{ident}: jira_key must look like DEV-123")
+    return key
 
 
 def generate_plan(goal: str, provider: str, workspace: Path, timeout: int = 600) -> Plan:

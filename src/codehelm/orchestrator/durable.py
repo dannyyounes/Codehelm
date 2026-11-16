@@ -16,6 +16,7 @@ from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStor
 from codehelm.planning.planner import Plan
 from codehelm.providers.usage import parse_cli_usage
 from codehelm.integrations.github_pr import PullRequestError, github_pull_request_merged
+from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
 
 # A live or unfinished coding agent must not be relaunched on resume.
@@ -27,6 +28,10 @@ _DURABLE_RESULTS = frozenset({
 _RESUME_TASK_ID = re.compile(
     r"^([A-Za-z0-9_]+)-([A-Za-z0-9_]+)-A([1-9][0-9]*)$"
 )
+
+
+class JiraTransitionError(ValueError):
+    """A requested Jira transition failed or had no issue key. The dispatch state is already stored."""
 
 
 def parse_resume_task_id(task_id: str) -> tuple[str, str, int]:
@@ -83,6 +88,7 @@ class DurableScheduler:
                 "SELECT story_id FROM dispatches WHERE prefix=?", (prefix,))}
             if existing != {s.id for s in plan.stories}:
                 raise ValueError("Plan changed for an existing prefix; use a new prefix")
+        self.jira_notes: list[tuple[str, str]] = []
 
     def snapshot(self) -> dict[str, tuple[str, int]]:
         with sqlite3.connect(self.store.database) as db:
@@ -245,6 +251,45 @@ class DurableScheduler:
                 (status, (error or "")[:1000], self.prefix, story_id))
             if result.rowcount != 1:
                 raise ValueError("Story is not currently claimed")
+        self._jira_after(story_id, status, "claimed")
+
+    def _jira_after(self, story_id: str, status: str, previous: str) -> None:
+        """Post one mapped transition. Off and dry-run unless the policy says otherwise.
+
+        A missing key or a Jira error is stored and raised. The dispatch row is left
+        as it was written. Unmapped states are not an error.
+        """
+        if status == previous:
+            return
+        policy = load_policy(policy_path_for(self.store.database))
+        if not policy.present:
+            return
+        transition_id = dict(policy.jira_transitions).get(status)
+        if not transition_id:
+            return
+        story = next((item for item in self.plan.stories if item.id == story_id), None)
+        attempt = self.snapshot().get(story_id, ("", 1))[1]
+        task_id = f"{self.prefix}-{story_id}-A{attempt if attempt else 1}"
+        key = story.jira_key if story else ""
+        if not key:
+            detail = f"Jira transition {transition_id} for {status} has no issue key on {story_id}"
+            self.store.append_event(task_id, "jira_transition_failed", detail)
+            raise JiraTransitionError(detail)
+        if not policy.jira_transition_execute:
+            detail = (
+                f"Dry run: would post transition {transition_id} on {key}. Jira is not called.")
+            self.store.append_event(task_id, "jira_transition_dry_run", detail)
+            self.jira_notes.append((story_id, detail))
+            return
+        try:
+            JiraClient.from_env().transition(key, transition_id)
+        except JiraError as exc:
+            detail = f"Jira transition {transition_id} on {key} failed: {exc}"
+            self.store.append_event(task_id, "jira_transition_failed", detail)
+            raise JiraTransitionError(detail) from exc
+        detail = f"Posted Jira transition {transition_id} on {key}"
+        self.store.append_event(task_id, "jira_transition_posted", detail)
+        self.jira_notes.append((story_id, detail))
 
     def claim_resumable(self, budget: DispatchBudget) -> list[str]:
         """Re-claim interrupted stories whose coding agent already finished.
@@ -436,6 +481,7 @@ class DurableScheduler:
                 raise ValueError("Story state changed during evaluation")
         if task:
             self.store.transition(task_id, decision.status, error=error or None)
+        self._jira_after(story_id, decision.status, state)
         return decision.status
 
     def complete(self, story_id: str, *, human_verified_merge: bool = False) -> None:
@@ -464,6 +510,7 @@ class DurableScheduler:
                                 (self.prefix, story_id, expected))
             if result.rowcount != 1:
                 raise ValueError("Story has not finished its dispatch")
+        self._jira_after(story_id, "completed", expected)
 
     def checkpoint(self) -> dict:
         """Persist a durable state snapshot; does not resume live CLI sessions."""
