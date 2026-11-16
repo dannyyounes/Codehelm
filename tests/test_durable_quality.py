@@ -269,8 +269,8 @@ def test_interrupt_resumes_same_attempt_and_skips_passed_gates(tmp_path):
         task_id, "review", "independent_review", passed=True, attempt=1,
         detail="Checked.\nAPPROVED", identity="codex")
     write_change(repo)
-    counter = tmp_path / "test-runs"
-    script = tmp_path / "count_tests.py"
+    counter = repo / "test-runs"
+    script = repo / "count_tests.py"
     script.write_text(
         "from pathlib import Path\n"
         f"path = Path(r'{counter}')\n"

@@ -1,9 +1,22 @@
 """Fail-closed validation and independent AI review gates."""
 from dataclasses import dataclass
 from pathlib import Path
+import os
+import re
+import shutil
 import subprocess
+import sys
 
 from codehelm.providers.adapters import CLIProvider
+
+_SANDBOX_ENV = {
+    "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING", "PYTHONUNBUFFERED",
+    "PYTHONDONTWRITEBYTECODE",
+}
+_SECRET_ENV = re.compile(
+    r"(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|AWS_|GITHUB_|GH_|CODEHELM_)",
+    re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -13,13 +26,33 @@ class GateResult:
     exit_code: int | None = None
 
 
+def _sandbox_env() -> dict[str, str]:
+    """Keep the interpreter's search path and drop credential variables."""
+    return {
+        key: value for key, value in os.environ.items()
+        if key in _SANDBOX_ENV and not _SECRET_ENV.search(key)
+    }
+
+
 def command_gate(workspace: Path, command: list[str], timeout: int = 300) -> GateResult:
-    """Execute an explicit argv command; no shell interpolation."""
+    """Run an argv command in a namespace sandbox. No shell, and no unsandboxed fallback."""
     if not command:
         return GateResult(False, "No command configured")
+    if any(not isinstance(part, str) or "\x00" in part or part == "" and index == 0
+           for index, part in enumerate(command)):
+        return GateResult(False, "Command arguments must be strings without NULs")
+    if shutil.which("unshare") is None:
+        return GateResult(False, "Sandbox unavailable: unshare is not installed")
+    if not Path(workspace).is_dir():
+        return GateResult(False, "Workspace missing")
     try:
-        result = subprocess.run(command, cwd=workspace, capture_output=True,
-                                text=True, timeout=timeout, shell=False)
+        result = subprocess.run(
+            ["unshare", "--user", "--map-root-user", "--mount", "--propagation", "private",
+             "--pid", "--fork", "--net", "--mount-proc", "--",
+             sys.executable, "-m", "codehelm.quality.sandbox", str(Path(workspace).resolve()),
+             "--", *command],
+            cwd=workspace, env=_sandbox_env(), capture_output=True,
+            text=True, timeout=timeout, shell=False)
         return GateResult(result.returncode == 0,
                           (result.stdout + "\n" + result.stderr)[-4000:],
                           result.returncode)
