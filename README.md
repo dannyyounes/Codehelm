@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. `quality-debt` accepts exactly one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -532,8 +532,9 @@ unprivileged user namespaces, including a default GitHub-hosted runner,
 must allow them first. The coding agent and the model reviewer are not in
 that namespace. This is not a container image.
 
-`quality-debt` accepts exactly one unresolved finding for the current attempt
-when a human records that finding text and a nonempty reason. It does not
+Each `quality-debt` row accepts one unresolved finding for the current attempt
+when a human records that finding text and a nonempty reason. More than one
+debt can be recorded. It does not
 waive tests, security, review, architecture, docs, acceptance, or human
 approval. A debt from another attempt does not count, and a debt whose text
 does not match a finding is ignored. Current limits: no signed approval, and
