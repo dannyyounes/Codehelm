@@ -68,4 +68,4 @@ High-risk classification uses path globs. When `risk_patterns` is omitted or nul
 
 ## Budgets and provider use
 
-Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply only to an explicitly supplied additional-charge estimate; no exchange rate is assumed. Do not describe any of these as guaranteed spend protection.
+Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply to an explicitly supplied additional-charge estimate, or to a USD amount multiplied by an operator-supplied AUD-per-USD rate and a source label. CodeHelm does not fetch a rate and does not assume one. Do not describe any of these as guaranteed spend protection.

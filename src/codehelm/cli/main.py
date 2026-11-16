@@ -17,6 +17,7 @@ from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
 from codehelm.orchestrator.monthly_budget import (
     MonthlyBudget, MonthlyPolicy, parse_override_amount)
+from codehelm.orchestrator.fx import resolve_additional_aud
 from decimal import Decimal
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
@@ -178,6 +179,21 @@ def pr_create(
     typer.echo(f"Draft pull request created: {url}")
 
 
+@app.command("aud-quote")
+def aud_quote(
+    usd: str = typer.Argument(..., help="Positive USD amount to convert"),
+    aud_per_usd: str = typer.Option(..., help="Operator-supplied AUD per 1 USD"),
+    rate_source: str = typer.Option(..., help="Where this rate came from; CodeHelm does not fetch one"),
+) -> None:
+    """Show an AUD amount from an explicit rate. Nothing is stored."""
+    try:
+        aud, rate, source = resolve_additional_aud("0", usd, aud_per_usd, rate_source)
+    except (ValueError, ArithmeticError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{Decimal(usd)} USD * {rate} = {aud} AUD (source: {source}). Not recorded.")
+
+
 @app.command("monthly-budget")
 def monthly_budget_status(month: str = typer.Option(None)) -> None:
     """Show additional AUD charge allowance, excluding existing subscriptions."""
@@ -316,6 +332,9 @@ def schedule_durable(
     limit_usd: str = typer.Option(..., help="Total plan USD budget"),
     heartbeat_seconds: int = typer.Option(30, min=5, max=300),
     additional_aud_per_task: str = typer.Option("0", help="Estimated additional AUD charge per task; subscription-only=0"),
+    additional_usd: str | None = typer.Option(None, help="USD amount to convert into the AUD reservation"),
+    aud_per_usd: str | None = typer.Option(None, help="Operator-supplied AUD per 1 USD; no default rate"),
+    aud_rate_source: str = typer.Option("", help="Label for the supplied rate; CodeHelm does not fetch one"),
     reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
     test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
     security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
@@ -330,8 +349,14 @@ def schedule_durable(
         policy = load_policy(STATE_DIR / "quality.yaml")
         budget = DispatchBudget(
             resolve_max_attempts(policy, max_attempts), max_total_attempts, max_parallel)
+        aud_amount, aud_rate, aud_source = resolve_additional_aud(
+            additional_aud_per_task, additional_usd, aud_per_usd, aud_rate_source)
         if not execute:
             typer.echo(f"Durable state: {scheduler.snapshot()}")
+            if aud_rate is not None:
+                typer.echo(
+                    f"Would reserve {aud_amount} AUD from {additional_usd} USD "
+                    f"at {aud_rate} ({aud_source}). Not recorded.")
             typer.echo("Dry run. Add --execute to claim and launch one wave.")
             if policy.present:
                 typer.echo("Quality policy active: execution continues through quality gates.")
@@ -339,11 +364,16 @@ def schedule_durable(
         if policy.present and (policy.require_review or policy.require_architecture):
             if not reviewer or reviewer == provider:
                 raise ValueError("Quality policy requires --reviewer set to a different provider")
+        if aud_rate is not None:
+            typer.echo(
+                f"AUD reservation {aud_amount} from {additional_usd} USD "
+                f"at {aud_rate} ({aud_source}).")
         limits = Limits(limit_tokens, Decimal(limit_usd))
         resumed = scheduler.claim_resumable(budget)
         chosen = scheduler.claim_budgeted(budget, provider, reserve_tokens,
                                           Decimal(reserve_usd), limits,
-                                          MonthlyPolicy(), Decimal(additional_aud_per_task))
+                                          MonthlyPolicy(), aud_amount,
+                                          aud_rate=aud_rate, aud_rate_source=aud_source)
         wave = resumed + [sid for sid in chosen if sid not in resumed]
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         stories = {story.id: story for story in plan_obj.stories}
