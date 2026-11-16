@@ -47,13 +47,13 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 
 `TaskStore.initialize` is the migration. It creates `quality_evidence` and `quality_evaluations` with `CREATE TABLE IF NOT EXISTS`, adds any missing columns, and records state schema version 2 in `schema_migrations`. Existing task and dispatch rows are left in place. `codehelm init` does not write a quality policy.
 
-`validate`, `document`, `validate-after-docs`, and the durable quality wave append evidence. `schedule-quality` does not run those commands again. It and the post-documentation gate call `assess`, which reads only the current attempt:
+`validate`, `document`, `docs-exception`, `validate-after-docs`, and the durable quality wave append evidence. `schedule-quality` does not run those commands again. It and the post-documentation gate call `assess`, which reads only the current attempt:
 
 | Check | Source | How to read it |
 | --- | --- | --- |
 | Tests, security, optional architecture command | `command_gate` exit code | Process result. Architecture review is still a model verdict. When that review is required, `architecture_cmd` must also exit 0 |
 | Independent review, architecture review | `independent_review` (exact `APPROVED` line, different provider, snapshot unchanged) | Model verdict recorded by the orchestrator |
-| Documentation | documentation agent file-hash check | Process result |
+| Documentation | documentation agent file-hash check, or `docs-exception` (`source=human`, GitHub login, nonempty reason, passed) | Process result, or a human exception for this attempt. A dry run does not call GitHub. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `git` status/diff plus policy globs | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
 | Acceptance criteria | `quality-attest` (`source=human`) or a `CODEHELM_ACCEPTANCE` line captured from the test process (`source=test_report`) | A passing exit code alone verifies nothing. A report file is used only when that process creates or changes it |
 | Human approval | `quality-approve` (`source=human`, identity is the `gh api user` login, detail is a sha256 digest of the workspace diff) | A typed name that is not that login is refused. A later change makes that approval not count. It is not a cryptographic signature of the person. Later scoring does not call GitHub again |

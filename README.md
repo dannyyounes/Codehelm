@@ -182,8 +182,12 @@ A second validation pass, draft PRs, and Jira comments were added in v0.7–v0.9
 Limitations: the checks use working-tree file hashes and do not catch every
 possible side effect (such as modifications to ignored files or Git history).
 The coding CLI runs with its normal local permissions; use a sandbox for
-untrusted code. Documentation that needs no change is not yet supported as a
-formal, independently approved exception.
+untrusted code. Documentation that needs no change is a human exception:
+`codehelm docs-exception TASK --reason TEXT --approver LOGIN`. With
+`--execute`, CodeHelm records it only when `--approver` strips to the
+GitHub login from `github_user_login()` and the reason is nonempty. A dry
+run does not call GitHub and writes nothing. The exception does not waive
+tests, security, review, acceptance, or human approval.
 
 ## Post-documentation validation (v0.7)
 
@@ -485,7 +489,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Tests and security | Exit code from `command_gate` | A real process result |
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
-| Documentation | Documentation-agent file check | A real workspace check |
+| Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `git` numstat plus policy globs, and optional `risk_patterns` | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` stores the GitHub login and a sha256 digest of the workspace diff | A later change makes that approval not count. It is not a cryptographic signature of the person. Later scoring does not call GitHub again |
@@ -533,6 +537,7 @@ starts a new attempt, and the previous attempt's rows do not count.
 codehelm validate PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
 codehelm document PLAN-S1-A1 --provider claude --execute
 codehelm quality-attest PLAN-S1-A1 --criterion "Works" --execute
+codehelm docs-exception PLAN-S1-A1 --reason "The README already describes this behavior" --approver YOUR_GITHUB_LOGIN --execute
 codehelm validate-after-docs PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
 codehelm schedule-quality S1 --plan-file .codehelm/plan.json --prefix PLAN --execute
 codehelm quality-approve PLAN-S1-A1 --approver YOUR_GITHUB_LOGIN --execute
@@ -551,6 +556,12 @@ records that login only when `--approver` matches it exactly. The row stores
 the GitHub login and a sha256 digest of the workspace diff. A dry run does
 not call GitHub. Later scoring does not call `gh` again. A later change
 makes that approval not count. It is not a cryptographic signature of the person.
+
+`docs-exception --execute` records a passing docs row for the current attempt
+when `--approver` strips to the GitHub login and `--reason` is nonempty. A
+dry run does not call GitHub. The exception does not waive tests, security,
+review, acceptance, or human approval. The documentation agent still fails
+when it changes no documentation file.
 
 Test and security commands run through `unshare` with a private user, mount,
 pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The

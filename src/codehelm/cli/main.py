@@ -834,6 +834,36 @@ def quality_justify(
         "Re-evaluate before advancing.")
 
 
+@app.command("docs-exception")
+def docs_exception(
+    task_id: str,
+    reason: str = typer.Option(..., help="Why documentation needs no change"),
+    approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
+    execute: bool = typer.Option(False, help="Record the exception as the authenticated GitHub user"),
+) -> None:
+    """Record a human documentation exception for this attempt. Other gates stay in force."""
+    if not execute:
+        typer.echo("Dry run. Add --execute to record a documentation exception as the authenticated GitHub login.")
+        return
+    try:
+        cleaned = (reason or "").strip()
+        if not cleaned:
+            raise ValueError("Documentation exception requires a nonempty reason")
+        login = github_user_login()
+        if approver.strip() != login:
+            raise PullRequestError(
+                f"Approver {approver.strip()!r} does not match authenticated GitHub login {login!r}")
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        store.record_evidence(
+            task_id, "docs", "human", passed=True, attempt=task_attempt(task_id),
+            detail=cleaned, identity=login)
+    except (ValueError, OSError, PullRequestError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded documentation exception by {login} for {task_id}. Re-evaluate before advancing.")
+
+
 @app.command("quality-debt")
 def quality_debt(
     task_id: str,

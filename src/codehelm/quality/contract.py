@@ -538,7 +538,15 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         reviewer_approved=reviewer_approved,
         reviewer_identity=reviewer_identity,
         implementer_identity=implementer_identity,
-        docs_verified=bool(docs and docs.source == "documentation_agent" and docs.passed),
+        docs_verified=bool(
+            docs and (
+                (docs.source == "documentation_agent" and docs.passed)
+                or (
+                    docs.source == "human" and docs.passed
+                    and bool(docs.detail.strip()) and bool(docs.identity.strip())
+                )
+            )
+        ),
         risks=sorted(set(recorded_risks) | set(_risks_for(changed_files, policy, workspace))),
         human_approved=human_approved,
         approval_mismatch=approval_mismatch,
