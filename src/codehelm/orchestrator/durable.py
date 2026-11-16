@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+import re
 import sqlite3
 
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
@@ -20,6 +21,18 @@ _NOT_RESUMABLE = frozenset({"queued", "running", "failed", "pr_created"})
 _DURABLE_RESULTS = frozenset({
     "awaiting_validation", "failed", "blocked", "awaiting_human_approval", "ready_for_pr",
 })
+# PREFIX-STORY-An, for example PLAN-S1-A1. The story id is the middle segment.
+_RESUME_TASK_ID = re.compile(
+    r"^([A-Za-z0-9_]+)-([A-Za-z0-9_]+)-A([1-9][0-9]*)$"
+)
+
+
+def parse_resume_task_id(task_id: str) -> tuple[str, str, int]:
+    """Return prefix, story id, and attempt. Reject any other shape."""
+    match = _RESUME_TASK_ID.fullmatch(task_id or "")
+    if not match:
+        raise ValueError("Task id must look like PREFIX-STORY-An, for example PLAN-S1-A1")
+    return match.group(1), match.group(2), int(match.group(3))
 
 
 @dataclass(frozen=True)
@@ -266,6 +279,37 @@ class DurableScheduler:
                         selected.append(story.id)
             db.execute("COMMIT")
             return selected
+
+    def reclaim_interrupted(self, story_id: str) -> None:
+        """Re-claim one interrupted story on the same attempt.
+
+        Attempts stay as they are. The task row for that attempt must exist and
+        must not be queued, running, failed, or pr_created. A missing quality
+        policy does not block this single-story reclaim. Other stories are left
+        untouched, and a story that is not interrupted is not moved.
+        """
+        if not any(story.id == story_id for story in self.plan.stories):
+            raise ValueError("Unknown story")
+        timestamp = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.store.database, timeout=30, isolation_level=None) as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT state, attempts FROM dispatches WHERE prefix=? AND story_id=?",
+                (self.prefix, story_id)).fetchone()
+            if row is None or row[0] != "interrupted" or row[1] < 1:
+                raise ValueError("Story is not interrupted")
+            task_id = f"{self.prefix}-{story_id}-A{row[1]}"
+            task = db.execute(
+                "SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if task is None or task[0] in _NOT_RESUMABLE:
+                raise ValueError("Task is not resumable")
+            result = db.execute(
+                """UPDATE dispatches SET state='claimed', claimed_at=?, error=NULL
+                   WHERE prefix=? AND story_id=? AND state='interrupted'""",
+                (timestamp, self.prefix, story_id))
+            if result.rowcount != 1:
+                raise ValueError("Story is not interrupted")
+            db.execute("COMMIT")
 
     def carry_story(self, story_id: str, engine: LifecycleEngine, *, prompt: str, provider: str,
                     test_command: list[str] | None = None, security_command: list[str] | None = None,

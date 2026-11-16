@@ -10,7 +10,9 @@ from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStor
 from codehelm.integrations.github_pr import PullRequestError, github_user_login
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
-from codehelm.orchestrator.durable import DurableScheduler, DispatchBudget, resolve_max_attempts
+from codehelm.orchestrator.durable import (
+    DurableScheduler, DispatchBudget, resolve_max_attempts, parse_resume_task_id,
+)
 from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
 from codehelm.orchestrator.monthly_budget import (
@@ -428,6 +430,75 @@ def schedule_recover(
         count = scheduler.recover_expired(DispatchBudget(lease_seconds=lease_seconds))
         typer.echo(f"Marked {count} expired claims interrupted. Inspect before retry.")
     except (ValueError, PlanningError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@app.command("agents")
+def agents(
+    limit: int = typer.Option(20, min=1, max=100, help="Maximum number of tasks to list"),
+) -> None:
+    """List stored tasks. Does not launch an agent or contact the network."""
+    rows = TaskStore(STATE_DIR / "state.db").list_recent(limit)
+    if not rows:
+        typer.echo("No tasks are recorded.")
+        return
+    for task_id, status, provider, updated_at in rows:
+        typer.echo(f"{task_id} {status} {provider or '-'} {updated_at}")
+
+
+@app.command("resume")
+def resume(
+    task_id: str = typer.Argument(..., help="Stored task id shaped PREFIX-STORY-An"),
+    plan_file: Path = typer.Option(Path(".codehelm/plan.json"), help="Plan used by the durable scheduler"),
+    prefix: str = typer.Option("", help="Must match the prefix parsed from the task id"),
+    reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
+    test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
+    security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
+    repo: Path = typer.Option(Path("."), help="Git repository"),
+    execute: bool = typer.Option(False, help="Re-claim the interrupted story and carry the same attempt"),
+) -> None:
+    """Continue one interrupted story on the same attempt. Does not relaunch a coding agent."""
+    try:
+        parsed_prefix, story_id, attempt = parse_resume_task_id(task_id)
+        if not execute:
+            typer.echo(
+                f"Dry run: resume {task_id} on the same attempt. "
+                "Dispatch state unchanged and no coding agent launched.")
+            return
+        if not prefix:
+            raise ValueError("resume --execute requires --prefix")
+        if prefix != parsed_prefix:
+            raise ValueError(f"Prefix must equal the prefix in {task_id}")
+        scheduler = DurableScheduler(STATE_DIR / "state.db", load_plan(plan_file), prefix)
+        task = scheduler.store.get(task_id)
+        if task is None:
+            raise ValueError(f"Unknown task: {task_id}")
+        if task.status in {"queued", "running", "failed"}:
+            raise ValueError(f"Coding agent will not be relaunched for {task_id}")
+        snapshot = scheduler.snapshot()
+        if story_id not in snapshot or snapshot[story_id][0] != "interrupted":
+            raise ValueError(
+                f"Story {story_id} is not interrupted. schedule-retry starts a new attempt")
+        if snapshot[story_id][1] != attempt:
+            raise ValueError("Task id does not match the interrupted attempt")
+        policy = load_policy(STATE_DIR / "quality.yaml")
+        provider = task.provider or ""
+        if policy.present and (policy.require_review or policy.require_architecture):
+            if not reviewer or reviewer == provider:
+                raise ValueError("Quality policy requires --reviewer set to a different provider")
+        scheduler.reclaim_interrupted(story_id)
+        engine = LifecycleEngine(repo, STATE_DIR / "state.db")
+        story = next(item for item in scheduler.plan.stories if item.id == story_id)
+        prompt = (f"Implement {story_id}: {story.title}\\n{story.description}\\n"
+                  "Acceptance criteria:\\n" + "\\n".join(story.acceptance_criteria))
+        status = scheduler.carry_story(
+            story_id, engine, prompt=prompt, provider=provider,
+            test_command=[test_cmd], security_command=[security_cmd],
+            reviewer=reviewer, docs_provider=provider,
+            heartbeat=lambda: scheduler.heartbeat(story_id))
+        typer.echo(f"{story_id}: {status}")
+    except (ValueError, PlanningError, ClaimLost, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 

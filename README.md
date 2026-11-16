@@ -55,7 +55,7 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 
 `codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, and the v1.7 quality commands.
 
-Not implemented under these names: `codehelm agents`, and a generic `codehelm resume <task-id>`. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
+`codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues an interrupted durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it names the task and does not change dispatch state. With `--execute` it re-claims that interrupted story and carries the same attempt forward. It refuses to relaunch a queued, running, or failed coding agent. `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
 
 ## Design principles
 
