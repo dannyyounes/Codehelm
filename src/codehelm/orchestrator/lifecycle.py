@@ -205,6 +205,14 @@ class TaskStore:
                 (task_id,status,error,timestamp)
             )
 
+    def append_event(self, task_id: str, status: str, detail: str = "") -> None:
+        """Record a side effect without changing the task row."""
+        with sqlite3.connect(self.database) as db:
+            db.execute(
+                "INSERT INTO task_events(task_id,status,detail,occurred_at) VALUES (?,?,?,?)",
+                (task_id, status, detail, now()),
+            )
+
     @staticmethod
     def _ensure_columns(db, table: str, columns: tuple[tuple[str, str], ...]) -> None:
         existing = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}

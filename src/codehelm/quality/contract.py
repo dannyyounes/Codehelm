@@ -83,7 +83,13 @@ _POLICY_FIELDS = {
     "approval_signature",
     "approval_signers",
     "auto_merge",
+    "jira_transitions",
+    "jira_transition_execute",
 }
+_JIRA_TRANSITION_STATES = frozenset({
+    "awaiting_validation", "failed", "blocked",
+    "awaiting_human_approval", "ready_for_pr", "completed",
+})
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
 _ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
 _ACCEPTANCE_REPORT_LIMIT = 65536
@@ -159,6 +165,8 @@ class QualityPolicy:
     approval_signature: str = "off"
     approval_signers: str = ""
     auto_merge: bool = False
+    jira_transitions: tuple[tuple[str, str], ...] = ()
+    jira_transition_execute: bool = False
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -435,6 +443,14 @@ def load_policy(path: Path) -> QualityPolicy:
         auto_merge = False
     else:
         auto_merge = _require_bool(data["auto_merge"], "auto_merge")
+    jira_transitions = _load_jira_transitions(data)
+    if "jira_transition_execute" not in data or data["jira_transition_execute"] is None:
+        jira_transition_execute = False
+    else:
+        jira_transition_execute = _require_bool(
+            data["jira_transition_execute"], "jira_transition_execute")
+    if jira_transition_execute and not jira_transitions:
+        raise ValueError("jira_transition_execute requires jira_transitions")
     return QualityPolicy(
         present=True,
         schema_version=POLICY_SCHEMA_VERSION,
@@ -456,7 +472,34 @@ def load_policy(path: Path) -> QualityPolicy:
         approval_signature=approval_signature,
         approval_signers=approval_signers,
         auto_merge=auto_merge,
+        jira_transitions=jira_transitions,
+        jira_transition_execute=jira_transition_execute,
     )
+
+
+def _load_jira_transitions(data: dict) -> tuple[tuple[str, str], ...]:
+    """Off unless the operator maps scheduler states to transition ids.
+
+    False and null stay off. A boolean true or an empty mapping is refused
+    because this loader does not invent transition ids.
+    """
+    if "jira_transitions" not in data or data["jira_transitions"] is None or data["jira_transitions"] is False:
+        return ()
+    raw = data["jira_transitions"]
+    if raw is True or not isinstance(raw, dict) or not raw:
+        raise ValueError(
+            "jira_transitions must be false or a nonempty mapping of state to transition id")
+    converted = []
+    for state, transition_id in raw.items():
+        if state not in _JIRA_TRANSITION_STATES:
+            raise ValueError(f"jira_transitions state {state!r} is not a scheduler outcome")
+        if not isinstance(transition_id, str) or not transition_id or any(
+            not (character.isascii() and (character.isalnum() or character == "-"))
+            for character in transition_id
+        ):
+            raise ValueError(f"jira_transitions.{state} must be a transition id")
+        converted.append((state, transition_id))
+    return tuple(converted)
 
 
 def _git(workspace: Path, *args: str) -> subprocess.CompletedProcess:
