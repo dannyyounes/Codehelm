@@ -37,7 +37,8 @@ def test_publish_workflow_is_main_and_tags_only():
         assert IMAGE in document
         assert "does not pull" in document
         assert f"{IMAGE}@sha256:" not in document
-    assert "fetched or default exchange rate" in readme
+    assert "fetched or default exchange rate" not in readme
+    assert "--fetch-aud-rate" in readme
     assert "a published container image" not in readme
     assert "automatic Jira transitions" not in readme
     assert "jira_transitions" in readme
