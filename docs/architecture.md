@@ -21,9 +21,9 @@ Explicit follow-up commands then run:
 
 `awaiting_validation → tests → security → independent review → awaiting_documentation → documenting → awaiting_post_docs_validation → tests → security → independent review`
 
-With no quality policy file, success ends at `awaiting_pr`. Failures persist as `blocked` or `changes_requested`. `pr-create` from `awaiting_pr` records `pr_created`. Nothing on this path merges or marks a story complete.
+With no quality policy file, success ends at `awaiting_pr`. Failures persist as `blocked` or `changes_requested`. `pr-create` from `awaiting_pr` records `pr_created`. Nothing on this path merges or marks a story complete. `schedule-durable` also stops a successful agent at `awaiting_validation` when the policy file is absent.
 
-With `.codehelm/quality.yaml` present, the post-documentation pass is scored by the quality contract. The task becomes `blocked`, `awaiting_human_approval`, or `ready_for_pr`. `pr-create` is allowed only from `ready_for_pr`, and it evaluates the recorded evidence again before publishing.
+With `.codehelm/quality.yaml` present, `schedule-durable` runs those gates inside the claimed attempt and then scores the contract. The manual post-documentation command does the same scoring. The task and the dispatch row become `blocked`, `awaiting_human_approval`, or `ready_for_pr`. `pr-create` is allowed only from `ready_for_pr`, and it evaluates the recorded evidence again before publishing. A failed gate does not launch the later model calls for that attempt.
 
 Story completion in the durable scheduler is a separate manual step. It requires a recorded draft PR and `--confirmed-merged`. CodeHelm does not query GitHub for merge status. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion.
 
@@ -39,7 +39,7 @@ Story completion in the durable scheduler is a separate manual step. It requires
 
 These are admission controls on estimates CodeHelm stores. They are not provider-side spending caps. Live token use is unknown unless a verified usage report is imported.
 
-A claim heartbeat refreshes `claimed_at`. If the lease expires, the story becomes `interrupted`. Recovery never relaunches the process. Retry is explicit and uses a new task id (`PREFIX-S1-A2`) and attempt number.
+A claim heartbeat refreshes `claimed_at` during the agent and, when a policy exists, between quality stages. If the lease expires, the story becomes `interrupted`. Recovery never relaunches a coding agent that is still queued, running, or failed. If the agent had already finished, the next `schedule-durable --execute` can resume that same attempt and skip gates that already passed. `schedule-retry` remains the way to start a new task id (`PREFIX-S1-A2`). Resume does not take a second budget reservation.
 
 ## Quality contract
 
@@ -47,7 +47,7 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 
 `TaskStore.initialize` is the migration. It creates `quality_evidence` and `quality_evaluations` with `CREATE TABLE IF NOT EXISTS`, adds any missing columns, and records state schema version 2 in `schema_migrations`. Existing task and dispatch rows are left in place. `codehelm init` does not write a quality policy.
 
-`validate`, `document`, and `validate-after-docs` append evidence. `schedule-quality` and the post-documentation gate call `assess`, which reads only the current attempt:
+`validate`, `document`, `validate-after-docs`, and the durable quality wave append evidence. `schedule-quality` does not run those commands again. It and the post-documentation gate call `assess`, which reads only the current attempt:
 
 | Check | Source | How to read it |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 
 `record_evidence` rejects any other source, including an agent-supplied JSON document. Outcomes are appended to `quality_evaluations` and copied onto the task and, from `schedule-quality --execute`, the dispatch row.
 
-An interrupted story cannot be evaluated. After an explicit retry, only the new attempt's rows count.
+`schedule-quality` still refuses an interrupted story. Resuming it first re-claims the same attempt; `schedule-retry` starts a new attempt, and only that new attempt's rows count.
 
 High-risk classification is path-glob only. A risky change outside those globs is not detected unless an operator records a `risk` row. There is no quality-debt register, no signed approval, and no sandbox around the commands the policy runs. Architecture review reuses the independent-review function with a different prompt; it is a second model verdict. `max_retries` on the policy is not a second retry loop. `DispatchBudget` remains the enforced attempt cap.
 

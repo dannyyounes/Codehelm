@@ -2,9 +2,12 @@
 
 A successful agent exit stops at awaiting_validation. Test, security, review,
 documentation and post-documentation gates are explicit later commands.
-When `.codehelm/quality.yaml` is present, recorded evidence decides
-blocked, awaiting_human_approval or ready_for_pr before a pull request.
+When `.codehelm/quality.yaml` is present, the durable scheduler can run those
+gates itself. Recorded evidence then decides blocked, awaiting_human_approval
+or ready_for_pr before a pull request. Acceptance and human approval stay
+operator attestations.
 """
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +51,10 @@ class Task:
     workspace: str | None
     exit_code: int | None
     error: str | None
+
+
+class ClaimLost(RuntimeError):
+    """The dispatch lease was revoked while a claimed story was still advancing."""
 
 
 @dataclass(frozen=True)
@@ -240,6 +247,59 @@ class TaskStore:
                 "requires_human": bool(row[2]), "policy_schema_version": row[3]}
 
 
+def _contract_stages(policy) -> list[tuple[str, str]]:
+    """Ordered gates. Documentation is followed by a second test/security/review pass."""
+    pre: list[tuple[str, str]] = []
+    if policy.require_tests:
+        pre.append(("tests", "command"))
+    if policy.require_security:
+        pre.append(("security", "command"))
+    if policy.require_review:
+        pre.append(("review", "review"))
+    stages = list(pre)
+    if policy.require_docs:
+        stages.append(("docs", "docs"))
+        stages.extend(pre)
+    if policy.require_architecture:
+        stages.append(("architecture", "architecture"))
+    return stages
+
+
+def _stage_match(row: EvidenceRow, kind: str) -> bool:
+    if kind == "command":
+        return row.source == "command_gate"
+    if kind == "review":
+        return row.gate == "review" and row.source == "independent_review"
+    if kind == "architecture":
+        return row.gate == "architecture" and row.source == "independent_review"
+    if kind == "docs":
+        return row.source == "documentation_agent"
+    return False
+
+
+def _stage_ok(row: EvidenceRow, kind: str, implementer: str) -> bool:
+    if kind == "command":
+        return bool(row.passed and row.exit_code == 0)
+    if kind in {"review", "architecture"}:
+        identity = row.identity.strip()
+        return bool(row.passed and identity and identity != implementer.strip())
+    if kind == "docs":
+        return bool(row.passed)
+    return False
+
+
+def _next_stage_row(rows: list[EvidenceRow], cursor: int, gate: str, kind: str,
+                    implementer: str) -> int | str | None:
+    """Index of the passing row, 'fail' for a completed rejection, or None if missing."""
+    for index, row in enumerate(rows):
+        if index <= cursor or row.gate != gate or not _stage_match(row, kind):
+            continue
+        if _stage_ok(row, kind, implementer):
+            return index
+        return "fail"
+    return None
+
+
 class LifecycleEngine:
     def __init__(self, repository: Path, database: Path):
         self.worktrees = WorktreeManager(repository)
@@ -413,6 +473,127 @@ class LifecycleEngine:
         self.store.transition(task_id, decision.status, error=decision_error(decision) or None)
         return decision.status == "ready_for_pr"
 
+    def run_contract_gates(self, task_id: str, test_command: list[str],
+                           security_command: list[str], reviewer: str,
+                           docs_provider: str, *, timeout: int = 300,
+                           docs_timeout: int = 600,
+                           heartbeat: Callable[[], bool] | None = None,
+                           acceptance_criteria: list[str] | None = None,
+                           story_id: str | None = None):
+        """Run missing quality stages for one attempt, then score recorded evidence.
+
+        Stages that already have a passing row for this attempt are not repeated.
+        A failing row fails closed and does not launch later model calls.
+        """
+        policy = self._policy()
+        if not policy.present:
+            raise ValueError("Quality policy is not active")
+        task = self.store.get(task_id)
+        if task is None or not task.workspace:
+            raise ValueError("Task workspace missing")
+        if task.status in {"queued", "running", "failed", "pr_created"}:
+            raise ValueError("Coding agent has not finished")
+        attempt = self._attempt_of(task_id, None)
+        implementer = task.provider or ""
+        stages = _contract_stages(policy)
+        if any(kind in {"review", "architecture"} for _, kind in stages):
+            if not reviewer or reviewer == implementer:
+                raise ValueError("Quality policy requires a reviewer that is not the implementer")
+        workspace = Path(task.workspace)
+        if not workspace.is_dir():
+            self._beat(heartbeat)
+            decision = self._score_contract(
+                task_id, attempt, policy, None, acceptance_criteria, story_id, implementer)
+            return decision
+
+        cursor = -1
+        pending = 0
+        docs_index = next((index for index, stage in enumerate(stages) if stage[1] == "docs"), None)
+        while pending < len(stages):
+            self._beat(heartbeat)
+            gate, kind = stages[pending]
+            rows = self.store.evidence_for(task_id, attempt)
+            outcome = _next_stage_row(rows, cursor, gate, kind, implementer)
+            if outcome == "fail":
+                return self._score_contract(
+                    task_id, attempt, policy, workspace, acceptance_criteria, story_id, implementer)
+            if isinstance(outcome, int):
+                cursor = outcome
+                pending += 1
+                continue
+            post = docs_index is not None and pending > docs_index
+            before = len(rows)
+            self._execute_contract_stage(
+                task_id, attempt, workspace, gate, kind, post=post,
+                test_command=test_command, security_command=security_command,
+                reviewer=reviewer, docs_provider=docs_provider or implementer,
+                timeout=timeout, docs_timeout=docs_timeout, implementer=implementer)
+            if len(self.store.evidence_for(task_id, attempt)) <= before:
+                raise RuntimeError(f"Quality stage {gate} did not record evidence")
+        self._beat(heartbeat)
+        return self._score_contract(
+            task_id, attempt, policy, workspace, acceptance_criteria, story_id, implementer)
+
+    @staticmethod
+    def _beat(heartbeat: Callable[[], bool] | None) -> None:
+        if heartbeat is not None and not heartbeat():
+            raise ClaimLost("Claim lost during quality gates")
+
+    def _score_contract(self, task_id: str, attempt: int, policy, workspace: Path | None,
+                        acceptance_criteria, story_id: str | None, implementer: str):
+        decision = assess(
+            self.store, task_id, attempt=attempt, policy=policy, workspace=workspace,
+            acceptance_criteria=acceptance_criteria, story_id=story_id or task_id,
+            implementer=implementer)
+        self.store.transition(task_id, decision.status, error=decision_error(decision) or None)
+        return decision
+
+    def _execute_contract_stage(self, task_id: str, attempt: int, workspace: Path,
+                                gate: str, kind: str, *, post: bool,
+                                test_command: list[str], security_command: list[str],
+                                reviewer: str, docs_provider: str, timeout: int,
+                                docs_timeout: int, implementer: str) -> None:
+        if kind == "command":
+            label = f"post_docs_{gate}" if post else gate
+            self.store.transition(task_id, f"validating_{label}")
+            command = list(test_command if gate == "tests" else security_command)
+            result = command_gate(workspace, command, timeout)
+            detail = f"argv={command!r}\n{result.detail}"
+            self._record_gate(task_id, attempt, gate, "command_gate",
+                              GateResult(result.passed, detail, result.exit_code))
+            return
+        if kind == "docs":
+            self.store.transition(task_id, "documenting")
+            try:
+                result = run_documentation_agent(workspace, docs_provider, docs_timeout)
+            except Exception as exc:
+                self.store.record_evidence(
+                    task_id, "docs", "documentation_agent", passed=False, attempt=attempt,
+                    detail=str(exc)[:4000])
+                return
+            self.store.record_evidence(
+                task_id, "docs", "documentation_agent", passed=result.passed, attempt=attempt,
+                detail=result.detail)
+            return
+        review_kind = "architecture" if kind == "architecture" else "code"
+        gate_name = "architecture" if kind == "architecture" else "review"
+        if kind == "architecture":
+            status = "reviewing_architecture"
+        elif post:
+            status = "post_docs_reviewing"
+        else:
+            status = "reviewing"
+        self.store.transition(task_id, status)
+        try:
+            verdict = independent_review(
+                workspace, implementer, reviewer, timeout, kind=review_kind)
+        except Exception as exc:
+            self.store.record_evidence(
+                task_id, gate_name, "independent_review", passed=False, attempt=attempt,
+                detail=str(exc)[:4000], identity=reviewer)
+            return
+        self._record_gate(task_id, attempt, gate_name, "independent_review", verdict,
+                          identity=reviewer)
 
     def create_pull_request(self, task_id: str, title: str, body: str,
                             base: str = "main") -> str:
