@@ -1146,8 +1146,16 @@ def quality_attest(
     try:
         store = TaskStore(STATE_DIR / "state.db")
         store.initialize()
+        attempt = task_attempt(task_id)
+        cleaned = (criterion or "").strip()
+        planned = [
+            row.detail.strip() for row in store.evidence_for(task_id, attempt)
+            if row.gate == "acceptance_planned" and row.source == "plan" and row.detail.strip()
+        ]
+        if planned and cleaned not in planned:
+            raise ValueError("Criterion is not one of the planned acceptance criteria")
         store.record_evidence(task_id, "acceptance", "human", passed=True,
-                              attempt=task_attempt(task_id), detail=criterion)
+                              attempt=attempt, detail=criterion)
     except (ValueError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
