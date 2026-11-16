@@ -1,9 +1,12 @@
-"""GitHub pull request publishing through authenticated gh CLI."""
+"""GitHub pull request publishing and the authenticated gh user."""
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import re
 import shutil
 import subprocess
+
+_GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 
 
 class PullRequestError(RuntimeError):
@@ -25,6 +28,16 @@ def _run(argv: list[str], cwd: Path) -> str:
     if result.returncode:
         raise PullRequestError((result.stderr or result.stdout).strip()[:1000])
     return result.stdout.strip()
+
+
+def github_user_login() -> str:
+    """Login returned by the authenticated gh CLI. Missing or malformed logins fail closed."""
+    if not shutil.which("gh"):
+        raise PullRequestError("GitHub CLI (gh) is not installed")
+    login = _run(["gh", "api", "user", "--jq", ".login"], Path.cwd()).strip()
+    if not _GITHUB_LOGIN.fullmatch(login):
+        raise PullRequestError("Authenticated GitHub login is missing or not a single login")
+    return login
 
 
 def publish_pr(workspace: Path, branch: str, title: str, body: str,
