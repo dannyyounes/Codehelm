@@ -18,6 +18,7 @@ from decimal import Decimal
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
 from codehelm.quality.contract import assess, decision_error, load_policy, task_attempt
+from codehelm.quality.diffdigest import diff_digest
 
 app = typer.Typer(help="CodeHelm: autonomous engineering orchestrator (early scaffold).")
 STATE_DIR = Path(".codehelm")
@@ -722,7 +723,7 @@ def quality_approve(
     approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
     execute: bool = typer.Option(False, help="Record approval as the authenticated GitHub user"),
 ) -> None:
-    """Record high-risk approval as the login returned by the authenticated gh CLI."""
+    """Record high-risk approval as the GitHub login and a digest of the workspace diff."""
     if not execute:
         typer.echo("Dry run. Add --execute to record approval as the authenticated GitHub login.")
         return
@@ -733,8 +734,13 @@ def quality_approve(
                 f"Approver {approver.strip()!r} does not match authenticated GitHub login {login!r}")
         store = TaskStore(STATE_DIR / "state.db")
         store.initialize()
+        task = store.get(task_id)
+        workspace = Path(task.workspace) if task and task.workspace else None
+        digest = diff_digest(workspace) if workspace is not None and workspace.is_dir() else ""
+        if workspace is None or not workspace.is_dir() or not digest:
+            raise ValueError("Human approval requires a workspace diff digest")
         store.record_evidence(task_id, "human_approval", "human", passed=True,
-                              attempt=task_attempt(task_id), identity=login)
+                              attempt=task_attempt(task_id), identity=login, detail=digest)
     except (ValueError, OSError, PullRequestError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

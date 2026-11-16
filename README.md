@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -471,7 +471,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Documentation | Documentation-agent file check | A real workspace check |
 | Diff size and risk paths | `git` numstat plus policy globs, and optional `risk_patterns` | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
-| Human approval | `quality-approve` records the login from `gh api user` | Checked when the row is written. Not a signature of the diff, and not re-checked on later scoring |
+| Human approval | `quality-approve` stores the GitHub login and a sha256 digest of the workspace diff | A later change makes that approval not count. It is not a cryptographic signature of the person. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
 | Oversized-change justification | Operator attestation | Not authenticated |
 
@@ -530,9 +530,10 @@ Missing evidence blocks the story. Re-scoring after `quality-attest`,
 `quality-approve`, or `quality-debt` does not spend another reviewer call.
 
 `quality-approve --execute` asks `gh api user` for the current login and
-records that login only when `--approver` matches it exactly. A dry run does
-not call GitHub. Later scoring trusts the stored row and does not call `gh`
-again. The row is not a signature of the diff.
+records that login only when `--approver` matches it exactly. The row stores
+the GitHub login and a sha256 digest of the workspace diff. A dry run does
+not call GitHub. Later scoring does not call `gh` again. A later change
+makes that approval not count. It is not a cryptographic signature of the person.
 
 Test and security commands run through `unshare` with a private user, mount,
 pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The

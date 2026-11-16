@@ -4,12 +4,13 @@ Agent-written evidence JSON is not accepted. Test, security, review, documentati
 and diff inputs come from rows the orchestrator stored after running those checks,
 or from git. A passing test exit code does not verify acceptance criteria. A
 criterion counts only when the test process the orchestrator ran emits a
-CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval is the
-GitHub login captured when quality-approve ran. It is not a signature of the
-diff. Oversized-change justification stays an operator attestation. A quality
-debt accepts one unresolved finding on the current attempt when its text
-matches. It does not waive tests, security, review, architecture, docs,
-acceptance, or human approval.
+CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval stores the
+GitHub login captured when quality-approve ran and a sha256 digest of the
+workspace diff. A later change makes that approval not count. It is not a
+cryptographic signature of the person. Oversized-change justification stays an
+operator attestation. A quality debt accepts one unresolved finding on the
+current attempt when its text matches. It does not waive tests, security,
+review, architecture, docs, acceptance, or human approval.
 An optional architecture command is a separate command_gate result and does not
 replace the model architecture review. Content risk patterns are optional; when
 none are configured, only path globs classify risk.
@@ -21,6 +22,8 @@ import re
 import subprocess
 
 import yaml
+
+from codehelm.quality.diffdigest import diff_digest
 
 HIGH_RISK = frozenset({
     "authentication_changes",
@@ -146,6 +149,7 @@ class QualityEvidence:
     docs_verified: bool = False
     risks: list[str] = field(default_factory=list)
     human_approved: bool = False
+    approval_mismatch: bool = False
     oversized_justification: str = ""
     unresolved_findings: list[str] = field(default_factory=list)
 
@@ -205,6 +209,8 @@ def evaluate(policy: QualityPolicy, evidence: QualityEvidence) -> ContractDecisi
         failures.append("documentation_not_verified")
     if evidence.unresolved_findings:
         failures.append("unresolved_findings")
+    if evidence.approval_mismatch and not evidence.human_approved:
+        failures.append("approval_diff_mismatch")
     needs_human = bool(set(evidence.risks) & policy.human_approval_risks)
     if failures:
         status = "blocked"
@@ -481,9 +487,16 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         row.detail.strip() for row in rows
         if row.gate == "oversized_justification" and row.source == "human" and row.detail.strip()
     )
-    human_approved = any(
-        row.gate == "human_approval" and row.source == "human" and row.passed and row.identity.strip()
-        for row in rows
+    current = diff_digest(workspace) if workspace else ""
+    approvals = [
+        row for row in rows
+        if row.gate == "human_approval" and row.source == "human" and row.passed
+    ]
+    human_approved = bool(current) and any(
+        row.identity.strip() and row.detail.strip() == current for row in approvals
+    )
+    approval_mismatch = bool(current) and any(
+        row.detail.strip() and row.detail.strip() != current for row in approvals
     )
     recorded_risks = [
         row.detail.strip() for row in rows
@@ -526,6 +539,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         docs_verified=bool(docs and docs.source == "documentation_agent" and docs.passed),
         risks=sorted(set(recorded_risks) | set(_risks_for(changed_files, policy, workspace))),
         human_approved=human_approved,
+        approval_mismatch=approval_mismatch,
         oversized_justification=justification,
         unresolved_findings=findings,
     )

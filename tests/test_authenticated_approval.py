@@ -1,4 +1,6 @@
 """High-risk approval records the authenticated GitHub login."""
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -7,6 +9,18 @@ from typer.testing import CliRunner
 from codehelm.cli.main import app
 from codehelm.integrations.github_pr import PullRequestError, github_user_login
 from codehelm.orchestrator.lifecycle import TaskStore
+from codehelm.quality.diffdigest import diff_digest
+
+
+def _repo(path: Path) -> Path:
+    path.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "test@example.org"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
+    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-m", "initial"], check=True, capture_output=True)
+    return path
 
 
 def test_github_login_uses_gh_and_rejects_a_bad_value(tmp_path, monkeypatch):
@@ -31,8 +45,11 @@ def test_github_login_uses_gh_and_rejects_a_bad_value(tmp_path, monkeypatch):
 def test_approve_records_the_matching_login(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".codehelm").mkdir()
+    repo = _repo(tmp_path / "repo")
+    (repo / "README.md").write_text("hello\nchange\n", encoding="utf-8")
     store = TaskStore(tmp_path / ".codehelm" / "state.db")
     store.initialize()
+    store.transition("DEV-1", "awaiting_human_approval", workspace=str(repo))
     with patch("codehelm.cli.main.github_user_login", return_value="dannyyounes"):
         result = CliRunner().invoke(
             app, ["quality-approve", "DEV-1", "--approver", " dannyyounes ", "--execute"])
@@ -40,6 +57,7 @@ def test_approve_records_the_matching_login(tmp_path, monkeypatch):
     rows = store.evidence_for("DEV-1", 1)
     assert [(row.gate, row.source, row.identity, row.passed) for row in rows] == [
         ("human_approval", "human", "dannyyounes", True)]
+    assert rows[0].detail == diff_digest(repo)
 
 
 def test_approve_refuses_a_different_name_and_a_github_error(tmp_path, monkeypatch):
