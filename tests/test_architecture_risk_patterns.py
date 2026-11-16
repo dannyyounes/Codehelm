@@ -9,7 +9,8 @@ import pytest
 
 from codehelm.orchestrator.lifecycle import LifecycleEngine, TaskStore
 from codehelm.quality.contract import (
-    QualityEvidence, QualityPolicy, assemble_evidence, evaluate, load_policy, _risks_for,
+    QualityEvidence, QualityPolicy, _DEFAULT_RISK_PATTERNS, assemble_evidence, evaluate,
+    load_policy, _risks_for,
 )
 from codehelm.quality.gates import GateResult
 
@@ -45,12 +46,122 @@ def test_policy_without_new_keys_loads(tmp_path):
     path.write_text("schema_version: 1\nmax_changed_lines: 50\n", encoding="utf-8")
     policy = load_policy(path)
     assert policy.architecture_cmd == ()
-    assert policy.risk_patterns == ()
+    assert policy.risk_patterns == _DEFAULT_RISK_PATTERNS
     assert policy.max_changed_lines == 50
     path.write_text("schema_version: 1\narchitecture_cmd:\n", encoding="utf-8")
     assert load_policy(path).architecture_cmd == ()
     path.write_text("schema_version: 1\nrisk_patterns:\n", encoding="utf-8")
+    assert load_policy(path).risk_patterns == _DEFAULT_RISK_PATTERNS
+    path.write_text("schema_version: 1\nrisk_patterns: null\n", encoding="utf-8")
+    assert load_policy(path).risk_patterns == _DEFAULT_RISK_PATTERNS
+    path.write_text("schema_version: 1\nrisk_patterns: {}\n", encoding="utf-8")
     assert load_policy(path).risk_patterns == ()
+
+
+def test_builtin_patterns_classify_a_changed_file(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    source = repo / "src"
+    source.mkdir()
+    app = source / "app.py"
+    policy_path = tmp_path / "quality.yaml"
+    policy_path.write_text("schema_version: 1\n", encoding="utf-8")
+    policy = load_policy(policy_path)
+    ghp = "ghp_" + ("a" * 36)
+    github_pat = "github_pat_" + ("a" * 22) + "_" + ("b" * 59)
+    samples = (
+        ("VALUE = 1\n", []),
+        ("-----BEGIN OPENSSH PRIVATE KEY-----\n", ["security_sensitive_changes"]),
+        ("-----BEGIN RSA PRIVATE KEY-----\n", ["security_sensitive_changes"]),
+        ("id = 'AKIAIOSFODNN7EXAMPLE'\n", ["security_sensitive_changes"]),
+        (f"token = '{ghp}'\n", ["security_sensitive_changes"]),
+        (f"token = '{github_pat}'\n", ["security_sensitive_changes"]),
+        ("DROP TABLE users;\n", ["database_migrations"]),
+        ("alter table users drop column email;\n", ["database_migrations"]),
+    )
+    for body, risks in samples:
+        app.write_text(body, encoding="utf-8")
+        assert _risks_for(["src/app.py"], policy, repo) == risks
+    outside = tmp_path / "secret.txt"
+    outside.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nDROP TABLE users;\n", encoding="utf-8")
+    (source / "link.py").symlink_to(outside)
+    assert _risks_for(["../secret.txt", "src/link.py"], policy, repo) == []
+
+    store = TaskStore(tmp_path / "state.db")
+    store.initialize()
+    store.record_evidence("T1", "acceptance", "human", passed=True, detail="Works")
+    store.record_evidence("T1", "tests", "command_gate", passed=True, exit_code=0)
+    store.record_evidence("T1", "security", "command_gate", passed=True, exit_code=0)
+    store.record_evidence("T1", "review", "independent_review", passed=True, identity="codex")
+    store.record_evidence("T1", "architecture", "independent_review", passed=True, identity="codex")
+    store.record_evidence("T1", "docs", "documentation_agent", passed=True)
+    app.write_text("VALUE = 1\n", encoding="utf-8")
+    quiet = assemble_evidence(store, "T1", 1, policy, repo, ["Works"], "S1", "claude")
+    assert "security_sensitive_changes" not in quiet.risks
+    assert "database_migrations" not in quiet.risks
+    app.write_text("-----BEGIN PRIVATE KEY-----\n", encoding="utf-8")
+    evidence = assemble_evidence(store, "T1", 1, policy, repo, ["Works"], "S1", "claude")
+    assert evidence.risks == ["security_sensitive_changes"]
+    decision = evaluate(policy, evidence)
+    assert decision.failures == ()
+    assert decision.status == "awaiting_human_approval"
+    assert decision.requires_human
+
+
+def test_configured_patterns_replace_builtins(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    source = repo / "src"
+    source.mkdir()
+    (source / "app.py").write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "AKIAIOSFODNN7EXAMPLE\n"
+        "DROP TABLE users;\n"
+        "SECRET_MARKER\n",
+        encoding="utf-8",
+    )
+    policy_path = tmp_path / "quality.yaml"
+    policy_path.write_text(
+        "schema_version: 1\n"
+        "risk_patterns:\n"
+        "  credential_material:\n"
+        "    - SECRET_MARKER\n",
+        encoding="utf-8",
+    )
+    policy = load_policy(policy_path)
+    assert policy.risk_patterns == (("credential_material", ("SECRET_MARKER",)),)
+    assert _risks_for(["src/app.py"], policy, repo) == ["credential_material"]
+
+
+def test_empty_risk_patterns_scans_no_content(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    source = repo / "src"
+    source.mkdir()
+    (source / "app.py").write_text(
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "AKIAIOSFODNN7EXAMPLE\n"
+        "ghp_" + ("a" * 36) + "\n"
+        "DROP TABLE users;\n",
+        encoding="utf-8",
+    )
+    migrations = repo / "migrations"
+    migrations.mkdir()
+    (migrations / "001.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    policy_path = tmp_path / "quality.yaml"
+    policy_path.write_text("schema_version: 1\nrisk_patterns: {}\n", encoding="utf-8")
+    policy = load_policy(policy_path)
+    assert policy.risk_patterns == ()
+    assert _risks_for(["src/app.py"], policy, repo) == []
+    assert _risks_for(["migrations/001.sql"], policy, repo) == ["database_migrations"]
+
+
+def test_risk_patterns_non_mapping_fails_closed(tmp_path):
+    path = tmp_path / "quality.yaml"
+    for text in (
+        "schema_version: 1\nrisk_patterns: []\n",
+        "schema_version: 1\nrisk_patterns: secret\n",
+    ):
+        path.write_text(text, encoding="utf-8")
+        with pytest.raises(ValueError, match="mapping"):
+            load_policy(path)
 
 
 def test_invalid_risk_regex_fails_load(tmp_path):
