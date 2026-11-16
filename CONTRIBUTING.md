@@ -4,4 +4,4 @@ CodeHelm is an early scaffold. Open an issue before large changes, keep PRs focu
 
 Run `pytest` after installing the development dependencies.
 
-Every change must receive independent code review. Do not commit secrets. The open-source license is still to be selected before public release.
+Every change must receive independent code review. Do not commit secrets. CodeHelm is licensed under the MIT License.

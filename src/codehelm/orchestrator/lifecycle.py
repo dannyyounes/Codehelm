@@ -1,7 +1,9 @@
 """Persisted single-task execution lifecycle.
 
-The engine does not mark a story complete: validation, independent review,
-documentation and PR gates are not implemented yet.
+A successful agent exit stops at awaiting_validation. Test, security, review,
+documentation and post-documentation gates are explicit later commands.
+When `.codehelm/quality.yaml` is present, recorded evidence decides
+blocked, awaiting_human_approval or ready_for_pr before a pull request.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,9 +12,28 @@ import sqlite3
 
 from codehelm.execution.worktrees import WorktreeManager
 from codehelm.providers.adapters import CLIProvider, AgentResult
-from codehelm.quality.gates import command_gate, independent_review
+from codehelm.quality.gates import GateResult, command_gate, independent_review
+from codehelm.quality.contract import (
+    assess, decision_error, load_policy, policy_path_for, task_attempt,
+)
 from codehelm.agents.documentation import run_documentation_agent
 from codehelm.integrations.github_pr import publish_pr
+
+# State schema 2 adds quality evidence. Policy schema_version is a separate number.
+STATE_SCHEMA_VERSION = 2
+_EVIDENCE_SOURCES = {
+    "tests": {"command_gate"},
+    "security": {"command_gate"},
+    "review": {"independent_review"},
+    "architecture": {"independent_review"},
+    "docs": {"documentation_agent"},
+    "acceptance": {"human"},
+    "acceptance_planned": {"plan"},
+    "human_approval": {"human"},
+    "oversized_justification": {"human"},
+    "finding": {"independent_review", "human"},
+    "risk": {"human"},
+}
 
 
 def now() -> str:
@@ -27,6 +48,17 @@ class Task:
     workspace: str | None
     exit_code: int | None
     error: str | None
+
+
+@dataclass(frozen=True)
+class EvidenceRow:
+    gate: str
+    source: str
+    passed: bool
+    exit_code: int | None
+    detail: str
+    identity: str
+    attempt: int
 
 
 class TaskStore:
@@ -55,6 +87,49 @@ class TaskStore:
                 detail TEXT,
                 occurred_at TEXT NOT NULL
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS quality_evidence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                gate TEXT NOT NULL,
+                source TEXT NOT NULL,
+                passed INTEGER NOT NULL,
+                exit_code INTEGER,
+                detail TEXT NOT NULL DEFAULT '',
+                identity TEXT NOT NULL DEFAULT '',
+                recorded_at TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS quality_evaluations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                story_id TEXT NOT NULL DEFAULT '',
+                policy_schema_version INTEGER,
+                policy_present INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                failures_json TEXT NOT NULL,
+                requires_human INTEGER NOT NULL,
+                evaluated_at TEXT NOT NULL
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )""")
+            self._ensure_columns(db, "quality_evidence", (
+                ("attempt", "INTEGER NOT NULL DEFAULT 1"),
+                ("exit_code", "INTEGER"),
+                ("detail", "TEXT NOT NULL DEFAULT ''"),
+                ("identity", "TEXT NOT NULL DEFAULT ''"),
+            ))
+            self._ensure_columns(db, "quality_evaluations", (
+                ("attempt", "INTEGER NOT NULL DEFAULT 1"),
+                ("story_id", "TEXT NOT NULL DEFAULT ''"),
+                ("policy_schema_version", "INTEGER"),
+                ("failures_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("requires_human", "INTEGER NOT NULL DEFAULT 0"),
+            ))
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(?,?)",
+                       (STATE_SCHEMA_VERSION, now()))
 
     def get(self, task_id: str) -> Task | None:
         with sqlite3.connect(self.database) as db:
@@ -83,12 +158,113 @@ class TaskStore:
                 (task_id,status,error,timestamp)
             )
 
+    @staticmethod
+    def _ensure_columns(db, table: str, columns: tuple[tuple[str, str], ...]) -> None:
+        existing = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns:
+            if name not in existing:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+
+    def record_evidence(self, task_id: str, gate: str, source: str, *,
+                        passed: bool, attempt: int = 1, exit_code: int | None = None,
+                        detail: str = "", identity: str = "") -> None:
+        """Persist one orchestrator-produced evidence row. Unknown sources are rejected."""
+        allowed = _EVIDENCE_SOURCES.get(gate)
+        if allowed is None or source not in allowed:
+            raise ValueError(f"Untrusted evidence source: {gate}/{source}")
+        if attempt < 1:
+            raise ValueError("Attempt must be positive")
+        if gate in {"acceptance", "oversized_justification", "risk"}:
+            detail = (detail or "").strip()
+        identity = (identity or "").strip()
+        if gate == "human_approval" and (not passed or not identity):
+            raise ValueError("Human approval requires an identity")
+        if gate in {"acceptance", "oversized_justification", "risk"} and not detail:
+            raise ValueError(f"{gate} requires detail text")
+        if gate in {"tests", "security"} and passed and exit_code != 0:
+            raise ValueError(f"{gate} pass requires exit code 0")
+        timestamp = now()
+        with sqlite3.connect(self.database) as db:
+            db.execute("""INSERT INTO quality_evidence
+                (task_id,attempt,gate,source,passed,exit_code,detail,identity,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (task_id, attempt, gate, source, 1 if passed else 0, exit_code,
+                 (detail or "")[:4000], identity or "", timestamp))
+
+    def replace_plan_criteria(self, task_id: str, attempt: int, criteria: list[str]) -> None:
+        """Store acceptance criteria taken from the validated plan, not from an agent."""
+        if attempt < 1 or not criteria or not all(isinstance(item, str) and item.strip() for item in criteria):
+            raise ValueError("Planned acceptance criteria must be nonempty strings")
+        timestamp = now()
+        with sqlite3.connect(self.database) as db:
+            db.execute("""DELETE FROM quality_evidence
+                WHERE task_id=? AND attempt=? AND gate='acceptance_planned' AND source='plan'""",
+                (task_id, attempt))
+            for criterion in criteria:
+                db.execute("""INSERT INTO quality_evidence
+                    (task_id,attempt,gate,source,passed,exit_code,detail,identity,recorded_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (task_id, attempt, "acceptance_planned", "plan", 1, None,
+                     criterion.strip()[:4000], "", timestamp))
+
+    def evidence_for(self, task_id: str, attempt: int) -> list[EvidenceRow]:
+        with sqlite3.connect(self.database) as db:
+            rows = db.execute("""SELECT gate,source,passed,exit_code,detail,identity,attempt
+                FROM quality_evidence WHERE task_id=? AND attempt=? ORDER BY id""",
+                (task_id, attempt)).fetchall()
+        return [EvidenceRow(gate, source, bool(passed), exit_code, detail or "", identity or "", attempt_no)
+                for gate, source, passed, exit_code, detail, identity, attempt_no in rows]
+
+    def record_evaluation(self, task_id: str, attempt: int, story_id: str,
+                          schema_version: int | None, status: str, failures_json: str,
+                          requires_human: bool) -> None:
+        if status not in {"blocked", "awaiting_human_approval", "ready_for_pr"}:
+            raise ValueError("Invalid quality outcome")
+        with sqlite3.connect(self.database) as db:
+            db.execute("""INSERT INTO quality_evaluations
+                (task_id,attempt,story_id,policy_schema_version,policy_present,status,
+                 failures_json,requires_human,evaluated_at)
+                VALUES (?,?,?,?,1,?,?,?,?)""",
+                (task_id, attempt, story_id, schema_version, status, failures_json,
+                 1 if requires_human else 0, now()))
+
+    def latest_evaluation(self, task_id: str, attempt: int) -> dict | None:
+        with sqlite3.connect(self.database) as db:
+            row = db.execute("""SELECT status,failures_json,requires_human,policy_schema_version
+                FROM quality_evaluations WHERE task_id=? AND attempt=?
+                ORDER BY id DESC LIMIT 1""", (task_id, attempt)).fetchone()
+        if not row:
+            return None
+        import json
+        return {"status": row[0], "failures": json.loads(row[1]),
+                "requires_human": bool(row[2]), "policy_schema_version": row[3]}
+
 
 class LifecycleEngine:
     def __init__(self, repository: Path, database: Path):
         self.worktrees = WorktreeManager(repository)
         self.store = TaskStore(database)
         self.store.initialize()
+
+    def _policy(self):
+        return load_policy(policy_path_for(self.store.database))
+
+    def _attempt_of(self, task_id: str, attempt: int | None) -> int:
+        return task_attempt(task_id) if attempt is None else attempt
+
+    def _record_gate(self, task_id: str, attempt: int, gate: str, source: str,
+                     result: GateResult, identity: str = "") -> None:
+        self.store.record_evidence(
+            task_id, gate, source, passed=result.passed, attempt=attempt,
+            exit_code=result.exit_code, detail=result.detail, identity=identity)
+
+    def _decide(self, task_id: str, attempt: int, policy, acceptance_criteria=None):
+        task = self.store.get(task_id)
+        workspace = Path(task.workspace) if task and task.workspace else None
+        return assess(
+            self.store, task_id, attempt=attempt, policy=policy, workspace=workspace,
+            acceptance_criteria=acceptance_criteria, story_id=task_id,
+            implementer=(task.provider or "") if task else "")
 
     def execute(self, task_id: str, prompt: str, provider: str,
                 timeout: int = 600) -> AgentResult:
@@ -114,27 +290,35 @@ class LifecycleEngine:
 
     def validate(self, task_id: str, test_command: list[str],
                  security_command: list[str], reviewer: str,
-                 timeout: int = 300) -> bool:
+                 timeout: int = 300, attempt: int | None = None) -> bool:
         """Run required test, security, and independent review gates in order."""
         task = self.store.get(task_id)
         if task is None or task.status != "awaiting_validation" or not task.workspace:
             raise ValueError("Task must be awaiting_validation")
+        attempt = self._attempt_of(task_id, attempt)
         workspace = Path(task.workspace)
         if not workspace.is_dir():
             self.store.transition(task_id, "blocked", error="Workspace missing")
             return False
-        for label, command in (("tests", test_command), ("security", security_command)):
-            self.store.transition(task_id, f"validating_{label}")
+        for gate, command in (("tests", test_command), ("security", security_command)):
+            self.store.transition(task_id, f"validating_{gate}")
             result = command_gate(workspace, command, timeout)
+            detail = f"argv={command!r}\n{result.detail}"
+            self._record_gate(task_id, attempt, gate, "command_gate",
+                              GateResult(result.passed, detail, result.exit_code))
             if not result.passed:
-                self.store.transition(task_id, "blocked", error=f"{label}: {result.detail}"[:2000])
+                self.store.transition(task_id, "blocked", error=f"{gate}: {result.detail}"[:2000])
                 return False
         self.store.transition(task_id, "reviewing")
         try:
             verdict = independent_review(workspace, task.provider or "", reviewer, timeout)
         except Exception as exc:
+            self.store.record_evidence(
+                task_id, "review", "independent_review", passed=False, attempt=attempt,
+                detail=str(exc), identity=reviewer)
             self.store.transition(task_id, "blocked", error=f"review: {exc}"[:2000])
             return False
+        self._record_gate(task_id, attempt, "review", "independent_review", verdict, identity=reviewer)
         if not verdict.passed:
             self.store.transition(task_id, "changes_requested", error=verdict.detail[:2000])
             return False
@@ -142,11 +326,13 @@ class LifecycleEngine:
         return True
 
 
-    def document(self, task_id: str, provider: str, timeout: int = 600) -> bool:
+    def document(self, task_id: str, provider: str, timeout: int = 600,
+                 attempt: int | None = None) -> bool:
         """Run documentation specialist only after quality gates pass."""
         task = self.store.get(task_id)
         if task is None or task.status != "awaiting_documentation" or not task.workspace:
             raise ValueError("Task must be awaiting_documentation")
+        attempt = self._attempt_of(task_id, attempt)
         workspace = Path(task.workspace)
         if not workspace.is_dir():
             self.store.transition(task_id, "blocked", error="Workspace missing")
@@ -155,8 +341,14 @@ class LifecycleEngine:
         try:
             result = run_documentation_agent(workspace, provider, timeout)
         except Exception as exc:
+            self.store.record_evidence(
+                task_id, "docs", "documentation_agent", passed=False, attempt=attempt,
+                detail=str(exc))
             self.store.transition(task_id, "blocked", error=f"documentation: {exc}"[:2000])
             return False
+        self.store.record_evidence(
+            task_id, "docs", "documentation_agent", passed=result.passed, attempt=attempt,
+            detail=result.detail)
         if not result.passed:
             self.store.transition(task_id, "blocked", error=result.detail[:2000])
             return False
@@ -167,19 +359,23 @@ class LifecycleEngine:
 
     def validate_after_docs(self, task_id: str, test_command: list[str],
                             security_command: list[str], reviewer: str,
-                            timeout: int = 300) -> bool:
+                            timeout: int = 300, attempt: int | None = None) -> bool:
         """Re-run gates after documentation; never mark complete or merge."""
         task = self.store.get(task_id)
         if task is None or task.status != "awaiting_post_docs_validation" or not task.workspace:
             raise ValueError("Task must be awaiting_post_docs_validation")
+        attempt = self._attempt_of(task_id, attempt)
         workspace = Path(task.workspace)
         if not workspace.is_dir():
             self.store.transition(task_id, "blocked", error="Workspace missing")
             return False
-        for label, command in (("post_docs_tests", test_command),
-                               ("post_docs_security", security_command)):
+        for gate, label, command in (("tests", "post_docs_tests", test_command),
+                                     ("security", "post_docs_security", security_command)):
             self.store.transition(task_id, f"validating_{label}")
             result = command_gate(workspace, command, timeout)
+            detail = f"argv={command!r}\n{result.detail}"
+            self._record_gate(task_id, attempt, gate, "command_gate",
+                              GateResult(result.passed, detail, result.exit_code))
             if not result.passed:
                 self.store.transition(task_id, "blocked", error=f"{label}: {result.detail}"[:2000])
                 return False
@@ -187,26 +383,57 @@ class LifecycleEngine:
         try:
             verdict = independent_review(workspace, task.provider or "", reviewer, timeout)
         except Exception as exc:
+            self.store.record_evidence(
+                task_id, "review", "independent_review", passed=False, attempt=attempt,
+                detail=str(exc), identity=reviewer)
             self.store.transition(task_id, "blocked", error=f"post_docs_review: {exc}"[:2000])
             return False
-        if not verdict.passed:
+        self._record_gate(task_id, attempt, "review", "independent_review", verdict, identity=reviewer)
+        policy = self._policy()
+        if not verdict.passed and not policy.present:
             self.store.transition(task_id, "changes_requested", error=verdict.detail[:2000])
             return False
-        self.store.transition(task_id, "awaiting_pr")
-        return True
+        if policy.present and policy.require_architecture and verdict.passed:
+            self.store.transition(task_id, "reviewing_architecture")
+            try:
+                architecture = independent_review(
+                    workspace, task.provider or "", reviewer, timeout, kind="architecture")
+            except Exception as exc:
+                self.store.record_evidence(
+                    task_id, "architecture", "independent_review", passed=False, attempt=attempt,
+                    detail=str(exc), identity=reviewer)
+                self.store.transition(task_id, "blocked", error=f"architecture: {exc}"[:2000])
+                return False
+            self._record_gate(task_id, attempt, "architecture", "independent_review",
+                              architecture, identity=reviewer)
+        if not policy.present:
+            self.store.transition(task_id, "awaiting_pr")
+            return True
+        decision = self._decide(task_id, attempt, policy)
+        self.store.transition(task_id, decision.status, error=decision_error(decision) or None)
+        return decision.status == "ready_for_pr"
 
 
     def create_pull_request(self, task_id: str, title: str, body: str,
                             base: str = "main") -> str:
         """Publish draft PR only after post-documentation gates pass."""
         task = self.store.get(task_id)
-        if task is None or task.status != "awaiting_pr" or not task.workspace:
-            raise ValueError("Task must be awaiting_pr")
+        policy = self._policy()
+        required = "ready_for_pr" if policy.present else "awaiting_pr"
+        if task is None or task.status != required or not task.workspace:
+            raise ValueError(f"Task must be {required}")
+        if policy.present:
+            decision = self._decide(task_id, task_attempt(task_id), policy)
+            if decision.status != "ready_for_pr":
+                self.store.transition(task_id, decision.status, error=decision_error(decision) or None)
+                raise ValueError(f"Quality contract status is {decision.status}")
         branch = self.worktrees._identity(task_id).branch
         try:
             pr = publish_pr(Path(task.workspace), branch, title, body, base=base)
         except Exception as exc:
-            self.store.transition(task_id, "awaiting_pr", error=f"PR publishing: {exc}"[:2000])
+            # Keep the status pr-create will accept on retry. A policy-gated task
+            # must stay ready_for_pr; awaiting_pr would make the next attempt fail closed.
+            self.store.transition(task_id, required, error=f"PR publishing: {exc}"[:2000])
             raise
         self.store.transition(task_id, "pr_created", error=pr.url)
         return pr.url

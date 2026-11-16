@@ -1,29 +1,69 @@
-# Architecture — draft
+# Architecture
+
+CodeHelm is a local CLI orchestrator. Model calls are limited to planning, implementation, documentation, and review adapters. Scheduling, budgets, and quality decisions are deterministic Python over SQLite.
+
+The package version is `0.1.0`. The behavior below is what the code does now.
 
 ## Control plane
-- **AI planning:** task decomposition, acceptance criteria, unexpected blocker analysis.
-- **Deterministic engine:** state transitions, dependency graph, budgets, retries, permissions, event-driven monitoring.
-- **Adapters:** CLI and API providers with explicit capabilities and authentication methods.
-- **State:** SQLite initially; PostgreSQL later. State lives outside model context.
-- **Context:** provider-specific minimal instruction files and just-in-time source retrieval.
-- **Execution:** one Git worktree per coding task; container sandbox when executing untrusted code.
-- **Integrations:** optional Jira epics, stories, bugs and progress updates.
 
-## Proposed lifecycle
-`created → planned → queued → running → validating → reviewing → documenting → pr_ready → completed`
+- **Planning:** a provider-neutral adapter returns a structured Epic and Stories. The plan is validated locally (IDs, dependencies, cycles) before anything is dispatched.
+- **Deterministic engine:** task transitions, the dependency-aware scheduler, attempt and concurrency limits, budget admission, and the quality contract.
+- **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. Direct API adapters are not implemented.
+- **State:** SQLite in `.codehelm/state.db`. Task rows, dispatch claims, budget reservations, and quality evidence live outside the model context.
+- **Execution:** one Git worktree per coding task. Worktrees are file isolation, not a container sandbox.
+- **Integrations:** optional Jira Cloud REST and draft GitHub pull requests via `gh`. Neither is required to run the engine. Creating a pull request does not merge it.
 
-Failure states: `blocked`, `failed`, `cancelled`. All transitions must be persisted and auditable.
+## Task lifecycle
 
-## Review and safety
-Independent review is mandatory for every completed story. Deterministic tests and security scans are separate gates. PR creation does not imply permission to merge. Human approval is required for destructive actions and production deployment.
+Agent execution persists `queued → running → awaiting_validation` or `failed`. A zero exit code is not story completion.
 
-## Efficiency
-Avoid model calls for polling, linting, tests, and Jira writes. Measure token usage by provider, task and epic. Keep retry limits and use structured compact outputs.
+Explicit follow-up commands then run:
 
-## Scope
-This is a design document. Only CLI initialization and status are currently implemented.
+`awaiting_validation → tests → security → independent review → awaiting_documentation → documenting → awaiting_post_docs_validation → tests → security → independent review`
 
-## Implemented v0.5 gates
-Explicit test command → explicit security command → different-provider AI review.
-Persist all transitions and stop at `awaiting_documentation` on approval.
-No automatic merging, PR creation or story completion.
+With no quality policy file, success ends at `awaiting_pr`. Failures persist as `blocked` or `changes_requested`. `pr-create` from `awaiting_pr` records `pr_created`. Nothing on this path merges or marks a story complete.
+
+With `.codehelm/quality.yaml` present, the post-documentation pass is scored by the quality contract. The task becomes `blocked`, `awaiting_human_approval`, or `ready_for_pr`. `pr-create` is allowed only from `ready_for_pr`, and it evaluates the recorded evidence again before publishing.
+
+Story completion in the durable scheduler is a separate manual step. It requires a recorded draft PR and `--confirmed-merged`. CodeHelm does not query GitHub for merge status. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion.
+
+## Durable scheduling
+
+`DurableScheduler` stores one row per story. Claims use `BEGIN IMMEDIATE`. Limits:
+
+- per-story attempts (default 2, maximum 5)
+- total attempts per prefix (default 20)
+- concurrent claims (default 2, maximum 8)
+- estimated token and USD reservations in the same transaction as a budgeted claim
+- optional additional-AUD monthly admission (warn A$10, critical A$15, pause A$20, epic A$5)
+
+These are admission controls on estimates CodeHelm stores. They are not provider-side spending caps. Live token use is unknown unless a verified usage report is imported.
+
+A claim heartbeat refreshes `claimed_at`. If the lease expires, the story becomes `interrupted`. Recovery never relaunches the process. Retry is explicit and uses a new task id (`PREFIX-S1-A2`) and attempt number.
+
+## Quality contract
+
+Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is absent, `load_policy` reports the contract inactive and existing commands keep their previous transitions. Omitted keys use defaults (tests, security, architecture review, independent review, documentation, acceptance criteria, 400 changed lines, and human approval for authentication, migrations, security-sensitive paths, and production infrastructure). Unknown schema versions and unknown keys fail closed.
+
+`TaskStore.initialize` is the migration. It creates `quality_evidence` and `quality_evaluations` with `CREATE TABLE IF NOT EXISTS`, adds any missing columns, and records state schema version 2 in `schema_migrations`. Existing task and dispatch rows are left in place. `codehelm init` does not write a quality policy.
+
+`validate`, `document`, and `validate-after-docs` append evidence. `schedule-quality` and the post-documentation gate call `assess`, which reads only the current attempt:
+
+| Check | Source | How to read it |
+| --- | --- | --- |
+| Tests, security | `command_gate` exit code | Process result |
+| Independent review, architecture review | `independent_review` (exact `APPROVED` line, different provider, snapshot unchanged) | Model verdict recorded by the orchestrator |
+| Documentation | documentation agent file-hash check | Process result |
+| Diff size and risk paths | `git` status/diff plus policy globs | Repository state |
+| Acceptance criteria | `quality-attest` (`source=human`) | Operator attestation, not inferred from tests |
+| Human approval, oversized justification | `quality-approve` or a stored justification | Operator attestation, not authenticated |
+
+`record_evidence` rejects any other source, including an agent-supplied JSON document. Outcomes are appended to `quality_evaluations` and copied onto the task and, from `schedule-quality --execute`, the dispatch row.
+
+An interrupted story cannot be evaluated. After an explicit retry, only the new attempt's rows count.
+
+High-risk classification is path-glob only. A risky change outside those globs is not detected unless an operator records a `risk` row. There is no quality-debt register, no signed approval, and no sandbox around the commands the policy runs. Architecture review reuses the independent-review function with a different prompt; it is a second model verdict. `max_retries` on the policy is not a second retry loop. `DispatchBudget` remains the enforced attempt cap.
+
+## Budgets and provider use
+
+Token and USD figures are reservations plus optional reconciliation of a verified provider JSON report. Missing fields fail closed. AUD controls apply only to an explicitly supplied additional-charge estimate; no exchange rate is assumed. Do not describe any of these as guaranteed spend protection.

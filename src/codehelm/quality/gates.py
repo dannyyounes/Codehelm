@@ -10,6 +10,7 @@ from codehelm.providers.adapters import CLIProvider
 class GateResult:
     passed: bool
     detail: str
+    exit_code: int | None = None
 
 
 def command_gate(workspace: Path, command: list[str], timeout: int = 300) -> GateResult:
@@ -20,7 +21,8 @@ def command_gate(workspace: Path, command: list[str], timeout: int = 300) -> Gat
         result = subprocess.run(command, cwd=workspace, capture_output=True,
                                 text=True, timeout=timeout, shell=False)
         return GateResult(result.returncode == 0,
-                          (result.stdout + "\n" + result.stderr)[-4000:])
+                          (result.stdout + "\n" + result.stderr)[-4000:],
+                          result.returncode)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return GateResult(False, str(exc))
 
@@ -34,23 +36,35 @@ def git_snapshot(workspace: Path) -> str:
     return status.stdout + "\n" + diff.stdout
 
 
+_REVIEW_PROMPTS = {
+    "code": ("Review the changes in this repository independently for correctness, "
+             "maintainability, security and tests. Do not edit files. "
+             "Return a final line exactly APPROVED or CHANGES_REQUESTED, "
+             "followed by no other text. Explain findings before that line."),
+    "architecture": ("Review the architecture of these changes for boundaries, data "
+                     "model, security and compatibility. Do not edit files. "
+                     "Return a final line exactly APPROVED or CHANGES_REQUESTED, "
+                     "followed by no other text. Explain findings before that line."),
+}
+
+
 def independent_review(workspace: Path, author: str, reviewer: str,
-                       timeout: int = 600) -> GateResult:
+                       timeout: int = 600, *, kind: str = "code") -> GateResult:
+    """Model verdict plus a Git snapshot guard. This is not human approval."""
+    if kind not in _REVIEW_PROMPTS:
+        return GateResult(False, f"Unknown review kind: {kind}")
     if reviewer == author:
         return GateResult(False, "Reviewer must use a different provider from the author")
     before = git_snapshot(workspace)
     if not before.strip():
         return GateResult(False, "No changes to review")
-    prompt = ("Review the changes in this repository independently for correctness, "
-              "maintainability, security and tests. Do not edit files. "
-              "Return a final line exactly APPROVED or CHANGES_REQUESTED, "
-              "followed by no other text. Explain findings before that line.")
-    result = CLIProvider(reviewer).execute(prompt, workspace, timeout)
+    result = CLIProvider(reviewer).execute(_REVIEW_PROMPTS[kind], workspace, timeout)
     after = git_snapshot(workspace)
     if after != before:
-        return GateResult(False, "Reviewer modified the workspace; review invalid")
+        return GateResult(False, "Reviewer modified the workspace; review invalid", result.exit_code)
     if result.exit_code:
-        return GateResult(False, f"Reviewer failed: {result.error[-2000:]}")
+        return GateResult(False, f"Reviewer failed: {result.error[-2000:]}", result.exit_code)
     lines = result.output.strip().splitlines()
     approved = bool(lines and lines[-1].strip() == "APPROVED")
-    return GateResult(approved, result.output[-4000:] or "Reviewer returned no verdict")
+    return GateResult(approved, result.output[-4000:] or "Reviewer returned no verdict",
+                      result.exit_code)

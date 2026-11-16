@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sqlite3
 
 import typer
@@ -16,6 +17,7 @@ from codehelm.orchestrator.monthly_budget import MonthlyBudget, MonthlyPolicy
 from decimal import Decimal
 from codehelm.planning.planner import (generate_plan, load_plan, save_plan,
                                       publish_plan_to_jira, PlanningError)
+from codehelm.quality.contract import assess, decision_error, load_policy, task_attempt
 
 app = typer.Typer(help="CodeHelm: autonomous engineering orchestrator (early scaffold).")
 STATE_DIR = Path(".codehelm")
@@ -615,6 +617,125 @@ def agent_run(
         typer.echo(result.error, err=True)
     if result.exit_code:
         raise typer.Exit(code=result.exit_code)
+
+
+@app.command("schedule-quality")
+def schedule_quality(
+    story_id: str,
+    plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
+    prefix: str = typer.Option("PLAN"),
+    execute: bool = typer.Option(False, help="Persist the contract outcome and dispatch transition"),
+) -> None:
+    """Evaluate recorded evidence for one story. Does not accept agent-written evidence JSON."""
+    try:
+        policy = load_policy(STATE_DIR / "quality.yaml")
+        if not policy.present:
+            typer.echo("No .codehelm/quality.yaml; quality contract inactive. Dispatch state unchanged.")
+            return
+        scheduler = DurableScheduler(STATE_DIR / "state.db", load_plan(plan_file), prefix)
+        if not execute:
+            snapshot = scheduler.snapshot()
+            if story_id not in snapshot:
+                raise ValueError("Unknown story")
+            _state, attempts = snapshot[story_id]
+            task_id = f"{prefix}-{story_id}-A{attempts}"
+            task = scheduler.store.get(task_id)
+            story = next((item for item in scheduler.plan.stories if item.id == story_id), None)
+            if story is None:
+                raise ValueError("Unknown story")
+            decision = assess(
+                scheduler.store, task_id, attempt=attempts, policy=policy,
+                workspace=Path(task.workspace) if task and task.workspace else None,
+                acceptance_criteria=story.acceptance_criteria, story_id=story.id,
+                implementer=(task.provider or "") if task else "", persist=False)
+            typer.echo(json.dumps(decision.to_dict()))
+            typer.echo("Dry run. Add --execute to record the outcome and transition the story.")
+            return
+        status = scheduler.apply_quality(story_id)
+    except (ValueError, PlanningError, OSError, KeyError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"{story_id}: {status}")
+    if status != "ready_for_pr":
+        raise typer.Exit(code=1)
+
+
+@app.command("quality-eval")
+def quality_eval(
+    task_id: str,
+    execute: bool = typer.Option(False, help="Persist the contract outcome on the task"),
+) -> None:
+    """Evaluate recorded evidence for one task. Ignored when no quality policy exists."""
+    try:
+        policy = load_policy(STATE_DIR / "quality.yaml")
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not policy.present:
+        typer.echo("No .codehelm/quality.yaml; quality contract inactive. Legacy lifecycle unchanged.")
+        return
+    store = TaskStore(STATE_DIR / "state.db")
+    store.initialize()
+    task = store.get(task_id)
+    if task is None:
+        typer.echo(f"Unknown task: {task_id}")
+        raise typer.Exit(code=1)
+    attempt = task_attempt(task_id)
+    decision = assess(
+        store, task_id, attempt=attempt, policy=policy,
+        workspace=Path(task.workspace) if task.workspace else None,
+        acceptance_criteria=None, story_id=task_id, implementer=task.provider or "",
+        persist=execute)
+    typer.echo(json.dumps(decision.to_dict()))
+    if execute:
+        store.transition(task_id, decision.status, error=decision_error(decision) or None)
+        typer.echo(f"{task_id}: {decision.status}")
+    else:
+        typer.echo("Dry run. Add --execute to record the outcome on the task.")
+    if decision.status != "ready_for_pr":
+        raise typer.Exit(code=1)
+
+
+@app.command("quality-approve")
+def quality_approve(
+    task_id: str,
+    approver: str = typer.Option(..., help="Person granting approval; not cryptographically verified"),
+    execute: bool = typer.Option(False, help="Record an operator approval attestation"),
+) -> None:
+    """Record human approval for high-risk changes. Re-run quality evaluation afterwards."""
+    if not execute:
+        typer.echo("Dry run. Add --execute to record approval. This does not authenticate the approver.")
+        return
+    try:
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        store.record_evidence(task_id, "human_approval", "human", passed=True,
+                              attempt=task_attempt(task_id), identity=approver)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded approval by {approver} for {task_id}. Re-evaluate before advancing.")
+
+
+@app.command("quality-attest")
+def quality_attest(
+    task_id: str,
+    criterion: str = typer.Option(..., help="Planned acceptance criterion being attested"),
+    execute: bool = typer.Option(False, help="Record an operator acceptance attestation"),
+) -> None:
+    """Record that an operator attests one acceptance criterion. Tests do not imply this."""
+    if not execute:
+        typer.echo("Dry run. Add --execute to record the attestation.")
+        return
+    try:
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        store.record_evidence(task_id, "acceptance", "human", passed=True,
+                              attempt=task_attempt(task_id), detail=criterion)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded acceptance attestation for {task_id}. Re-evaluate before advancing.")
 
 
 if __name__ == "__main__":
