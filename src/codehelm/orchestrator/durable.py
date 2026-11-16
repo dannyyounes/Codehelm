@@ -12,6 +12,7 @@ import sqlite3
 
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.planning.planner import Plan
+from codehelm.integrations.github_pr import PullRequestError, github_pull_request_merged
 from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
 
 # A live or unfinished coding agent must not be relaunched on resume.
@@ -351,7 +352,7 @@ class DurableScheduler:
         return decision.status
 
     def complete(self, story_id: str, *, human_verified_merge: bool = False) -> None:
-        """Manual completion requires explicit external verification; no API merge check."""
+        """Complete a story only after gh reports the recorded pull request merged."""
         attempt = self.snapshot().get(story_id, ("", 0))[1]
         if not human_verified_merge:
             raise ValueError("Human verification of merged PR is required")
@@ -366,6 +367,10 @@ class DurableScheduler:
             if not latest or latest["status"] != "ready_for_pr":
                 raise ValueError("Quality contract must be ready_for_pr before completion")
             expected = "ready_for_pr"
+        try:
+            github_pull_request_merged(task.error or "")
+        except PullRequestError as exc:
+            raise ValueError(str(exc)) from exc
         with sqlite3.connect(self.store.database) as db:
             result = db.execute("""UPDATE dispatches SET state='completed'
                                    WHERE prefix=? AND story_id=? AND state=?""",

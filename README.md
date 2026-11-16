@@ -314,8 +314,9 @@ concurrent claims, per-story attempts, and total attempts. Each retry uses a
 fresh task ID/worktree (`PLAN-S1-A2`) rather than rerunning a prior task.
 Expired leases become `interrupted`, requiring process/worktree inspection
 and **explicit** retry authorization. A dependent story only unlocks after
-a human explicitly confirms its predecessor's PR was merged and marks it
-complete; CodeHelm does **not** independently verify GitHub merge status.
+`schedule-complete --confirmed-merged --execute` asks `gh pr view` and
+completes the story only when that pull request is `MERGED`. An open or
+closed-unmerged pull request leaves the story unchanged.
 
 This milestone is durable *batch dispatch*, not a long-running daemon or a
 crash-resumable model session. It did not heartbeat claims or reserve
@@ -492,9 +493,9 @@ persist one of three outcomes and use it as the task or dispatch state:
 `pr-create` then requires `ready_for_pr` and evaluates the recorded evidence
 again before pushing. A task left at `awaiting_pr` before the policy file
 existed is not grandfathered; re-run the post-documentation gates or
-`quality-eval --execute`. `schedule-complete` also requires that latest outcome,
-a recorded draft PR, and `--confirmed-merged`. CodeHelm still does not ask
-GitHub whether the PR merged. Evidence is stored per attempt. `schedule-quality`
+`quality-eval --execute`. `schedule-complete` also requires that latest outcome, a recorded pull
+request, `--confirmed-merged`, and a `MERGED` result from `gh pr view`.
+Evidence is stored per attempt. `schedule-quality`
 still refuses an interrupted claim. `schedule-durable` can resume that claim
 on the same attempt after the coding agent has finished. `schedule-retry`
 starts a new attempt, and the previous attempt's rows do not count.

@@ -30,6 +30,30 @@ def _run(argv: list[str], cwd: Path) -> str:
     return result.stdout.strip()
 
 
+_PR_URL = re.compile(
+    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*$")
+
+
+def github_pull_request_merged(url: str) -> None:
+    """Raise unless gh reports this pull request merged. Open and closed PRs fail closed."""
+    url = (url or "").strip()
+    if not _PR_URL.fullmatch(url):
+        raise PullRequestError("Stored PR URL is not a GitHub pull request")
+    if not shutil.which("gh"):
+        raise PullRequestError("GitHub CLI (gh) is not installed")
+    raw = _run(["gh", "pr", "view", url, "--json", "state,mergedAt"], Path.cwd())
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PullRequestError("GitHub did not return pull request JSON") from exc
+    if not isinstance(payload, dict):
+        raise PullRequestError("GitHub did not return pull request JSON")
+    state = payload.get("state")
+    merged_at = payload.get("mergedAt")
+    if state != "MERGED" or not isinstance(merged_at, str) or not merged_at.strip():
+        raise PullRequestError(f"Pull request is not merged (state={state})")
+
+
 def github_user_login() -> str:
     """Login returned by the authenticated gh CLI. Missing or malformed logins fail closed."""
     if not shutil.which("gh"):
