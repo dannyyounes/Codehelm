@@ -49,6 +49,8 @@ def test_policy_without_new_keys_loads(tmp_path):
     assert policy.max_changed_lines == 50
     path.write_text("schema_version: 1\narchitecture_cmd:\n", encoding="utf-8")
     assert load_policy(path).architecture_cmd == ()
+    path.write_text("schema_version: 1\nrisk_patterns:\n", encoding="utf-8")
+    assert load_policy(path).risk_patterns == ()
 
 
 def test_invalid_risk_regex_fails_load(tmp_path):
@@ -127,6 +129,11 @@ def test_architecture_check_exit_gates_evaluation():
     assert "architecture_check_not_verified" not in still_model.failures
     assert "architecture_check_not_verified" not in empty.failures
     assert "architecture_check_not_verified" not in empty_failed.failures
+    review_off = QualityPolicy(
+        require_architecture=False, architecture_cmd=("python", "-c", "pass"))
+    skipped = evaluate(review_off, passing(architecture_check_exit=None, architecture_approved=False))
+    assert "architecture_check_not_verified" not in skipped.failures
+    assert "architecture_review_missing" not in skipped.failures
 
 
 def test_architecture_check_pass_requires_exit_zero(tmp_path):

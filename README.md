@@ -465,7 +465,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Check | What is stored | What it is |
 | --- | --- | --- |
 | Tests and security | Exit code from `command_gate` | A real process result |
-| Optional architecture command | Exit code from `command_gate` when `architecture_cmd` is set | Architecture review is still a model verdict. When `architecture_cmd` is set, that command must also exit 0 |
+| Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check | A real workspace check |
 | Diff size and risk paths | `git` numstat plus policy globs, and optional `risk_patterns` | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
@@ -490,8 +490,9 @@ risk name even when the path matches no glob. Files outside the change set are
 not scanned. With no `risk_patterns`, a risky edit outside those globs is not
 detected unless an operator records it.
 
-Architecture review is still a model verdict. An optional `architecture_cmd`
-must also exit 0 and does not replace that review.
+Architecture review is still a model verdict. When that review is required, an
+optional `architecture_cmd` runs first and must also exit 0. It does not
+replace the review. Turning architecture review off skips the command.
 
 When the policy file exists, `validate-after-docs` and `schedule-quality --execute`
 persist one of three outcomes and use it as the task or dispatch state:

@@ -190,7 +190,7 @@ def evaluate(policy: QualityPolicy, evidence: QualityEvidence) -> ContractDecisi
         failures.append("tests_not_verified")
     if policy.require_security and evidence.security_exit_code != 0:
         failures.append("security_scan_not_verified")
-    if policy.architecture_cmd and evidence.architecture_check_exit != 0:
+    if policy.require_architecture and policy.architecture_cmd and evidence.architecture_check_exit != 0:
         failures.append("architecture_check_not_verified")
     if policy.require_architecture and not evidence.architecture_approved:
         failures.append("architecture_review_missing")
@@ -304,7 +304,7 @@ def load_policy(path: Path) -> QualityPolicy:
         architecture_cmd = ()
     else:
         architecture_cmd = _load_architecture_cmd(data["architecture_cmd"])
-    if "risk_patterns" not in data:
+    if "risk_patterns" not in data or data["risk_patterns"] is None:
         risk_patterns = ()
     else:
         risk_patterns = _load_risk_patterns(data["risk_patterns"])
