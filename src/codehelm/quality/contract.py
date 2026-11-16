@@ -6,7 +6,10 @@ or from git. A passing test exit code does not verify acceptance criteria. A
 criterion counts only when the test process the orchestrator ran emits a
 CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval is the
 GitHub login captured when quality-approve ran. It is not a signature of the
-diff. Oversized-change justification stays an operator attestation.
+diff. Oversized-change justification stays an operator attestation. A quality
+debt accepts one unresolved finding on the current attempt when its text
+matches. It does not waive tests, security, review, architecture, docs,
+acceptance, or human approval.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -378,10 +381,16 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         if row.gate == "acceptance" and row.source == "test_report" and not row.passed and row.detail.strip()
     }
     verified = sorted(human_verified | (report_passed - report_failed))
+    accepted_debts = {
+        row.detail.strip() for row in rows
+        if row.gate == "quality_debt" and row.source == "human" and row.passed
+        and row.detail.strip() and row.identity.strip()
+    }
     findings = [
         row.detail for row in rows
         if row.gate == "finding" and row.source in {"independent_review", "human"}
         and not row.passed and row.detail.strip()
+        and row.detail.strip() not in accepted_debts
     ]
     justification = "\n".join(
         row.detail.strip() for row in rows

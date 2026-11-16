@@ -738,6 +738,28 @@ def quality_approve(
     typer.echo(f"Recorded approval by {login} for {task_id}. Re-evaluate before advancing.")
 
 
+@app.command("quality-debt")
+def quality_debt(
+    task_id: str,
+    finding: str = typer.Option(..., help="Unresolved finding text this debt accepts"),
+    reason: str = typer.Option(..., help="Why this one finding is accepted as debt"),
+    execute: bool = typer.Option(False, help="Record the quality debt for the current attempt"),
+) -> None:
+    """Accept one unresolved finding for the current attempt. Other gates stay in force."""
+    if not execute:
+        typer.echo("Dry run. Add --execute to record the quality debt.")
+        return
+    try:
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        store.record_evidence(task_id, "quality_debt", "human", passed=True,
+                              attempt=task_attempt(task_id), detail=finding, identity=reason)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recorded quality debt for {task_id}. Re-evaluate before advancing.")
+
+
 @app.command("quality-attest")
 def quality_attest(
     task_id: str,
