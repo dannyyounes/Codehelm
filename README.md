@@ -454,7 +454,8 @@ human_approval_risks:
   - production_infrastructure
 ```
 
-Omitted keys use those defaults. `schema_version` must be `1`. Unknown keys
+Omitted keys use those defaults. `architecture_cmd` and `risk_patterns` are
+optional and empty when omitted. `schema_version` must be `1`. Unknown keys
 or an unknown schema version fail closed. `max_retries` is recorded policy
 only; the enforced attempt cap remains the scheduler's `DispatchBudget`.
 
@@ -464,9 +465,10 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Check | What is stored | What it is |
 | --- | --- | --- |
 | Tests and security | Exit code from `command_gate` | A real process result |
+| Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check | A real workspace check |
-| Diff size and risk paths | `git` numstat plus policy globs | Repository state |
+| Diff size and risk paths | `git` numstat plus policy globs, and optional `risk_patterns` | Repository state. `risk_patterns` are optional content regexes over changed files; with none configured, only path globs classify risk |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` records the login from `gh api user` | Checked when the row is written. Not a signature of the diff, and not re-checked on later scoring |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
@@ -482,7 +484,15 @@ CODEHELM_ACCEPTANCE	<exact planned criterion>	passed
 
 Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
 `infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
-A risky edit outside those globs is not detected unless an operator records it.
+`risk_patterns` are optional content regexes over changed files. With none
+configured, only path globs classify risk. A match on a changed file adds that
+risk name even when the path matches no glob. Files outside the change set are
+not scanned. With no `risk_patterns`, a risky edit outside those globs is not
+detected unless an operator records it.
+
+Architecture review is still a model verdict. When that review is required, an
+optional `architecture_cmd` runs first and must also exit 0. It does not
+replace the review. Turning architecture review off skips the command.
 
 When the policy file exists, `validate-after-docs` and `schedule-quality --execute`
 persist one of three outcomes and use it as the task or dispatch state:
