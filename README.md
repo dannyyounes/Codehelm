@@ -429,8 +429,10 @@ additional charge under an existing subscription. Budget admission and
 scheduler claim happen in one SQLite transaction. Reconciliation of actual
 additional AUD charges is supported by the ledger API. `budget-approve`
 records a GitHub login and a reason for one exact task, epic, and amount. A
-dry run does not call GitHub. It does not raise the standing cap, and it is
-not spend protection or billing reconciliation. Automatic provider billing
+dry run does not call GitHub. `schedule-durable` consumes that row only when
+the task id, epic, month, and amount match; otherwise it still pauses. It
+does not raise the standing cap, and it is not spend protection or billing
+reconciliation. Automatic provider billing
 reconciliation is not implemented. This is an admission pause, not a hard
 provider cap. The legacy `schedule` command does not use these controls.
 

@@ -1,4 +1,5 @@
 """One-shot budget overrides admit one exact additional-charge reservation."""
+import json
 import sqlite3
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -8,7 +9,10 @@ import pytest
 from typer.testing import CliRunner
 
 from codehelm.cli.main import app
-from codehelm.orchestrator.monthly_budget import MonthlyBudget, parse_override_amount
+from codehelm.orchestrator.budgets import Limits
+from codehelm.orchestrator.durable import DispatchBudget, DurableScheduler
+from codehelm.orchestrator.monthly_budget import MonthlyBudget, MonthlyPolicy, parse_override_amount
+from codehelm.planning.planner import parse_plan
 
 
 def _overrides(path):
@@ -84,6 +88,34 @@ def test_extra_decimal_places_can_match_and_subscription_does_not_consume(tmp_pa
     assert _overrides(path)[0][6] is None
     ledger.reserve("precise", "E1", Decimal("5.125"), month="2026-11")
     assert _overrides(path)[0][6] is not None
+
+
+def test_scheduler_claims_one_story_past_the_epic_cap_when_the_override_matches(tmp_path):
+    plan = parse_plan(json.dumps({
+        "epic_title": "Epic", "epic_description": "Description",
+        "stories": [
+            {"id": f"S{i}", "title": f"Story {i}", "description": "Implement",
+             "acceptance_criteria": ["Pass"], "dependencies": []}
+            for i in range(1, 4)
+        ],
+    }))
+    db = tmp_path / "state.db"
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    MonthlyBudget(db).record_override(
+        "E1-S3-A1", "E1", Decimal("2.50"), "dannyyounes", "incident", month=month)
+    scheduler = DurableScheduler(db, plan, "E1")
+    chosen = scheduler.claim_budgeted(
+        DispatchBudget(max_active=3), "claude", 100, Decimal("0.5"),
+        Limits(1000, Decimal("10")), MonthlyPolicy(), Decimal("2.50"), month=month)
+    assert chosen == ["S1", "S2", "S3"]
+    with sqlite3.connect(db) as connection:
+        used = connection.execute(
+            "SELECT used_at FROM budget_overrides WHERE task_id='E1-S3-A1'").fetchone()[0]
+    assert used is not None
+    again = scheduler.claim_budgeted(
+        DispatchBudget(max_active=3), "claude", 100, Decimal("0.5"),
+        Limits(1000, Decimal("10")), MonthlyPolicy(), Decimal("2.50"), month=month)
+    assert again == []
 
 
 def test_override_amount_rejects_non_positive_and_non_numeric():
