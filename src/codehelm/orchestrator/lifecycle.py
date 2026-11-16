@@ -156,6 +156,31 @@ class TaskStore:
             ).fetchone()
         return Task(*row) if row else None
 
+    def list_recent(self, limit: int) -> list[tuple[str, str, str | None, str]]:
+        """Return (id, status, provider, updated_at), active work first.
+
+        Queued and running tasks come before every other status. Each group is
+        ordered by updated_at descending. This only reads; it does not insert a task.
+        """
+        if not 1 <= limit <= 100:
+            raise ValueError("Limit must be from 1 to 100")
+        if not self.database.exists():
+            return []
+        with sqlite3.connect(self.database) as db:
+            table = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+            ).fetchone()
+            if table is None:
+                return []
+            rows = db.execute(
+                """SELECT id, status, provider, updated_at FROM tasks
+                   ORDER BY CASE WHEN status IN ('queued', 'running') THEN 0 ELSE 1 END,
+                            updated_at DESC, id ASC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [(row[0], row[1], row[2], row[3]) for row in rows]
+
     def transition(self, task_id: str, status: str, *,
                    provider: str | None = None, workspace: str | None = None,
                    exit_code: int | None = None, error: str | None = None) -> None:
