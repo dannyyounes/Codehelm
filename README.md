@@ -15,6 +15,7 @@ Implemented in this repository:
 - Estimated token/USD reservations and an additional-AUD admission budget
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
+- DesignFlow screen and form mockups, inline comments, and an explicit agent revision loop
 
 There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
@@ -54,7 +55,7 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 
 ## Commands
 
-`codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, and the v1.7 quality commands.
+`codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, the v1.7 quality commands, and `designflow`.
 
 `codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues an interrupted durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it names the task and does not change dispatch state. With `--execute` it re-claims that interrupted story and carries the same attempt forward. It refuses to relaunch a queued, running, or failed coding agent. `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
 
@@ -84,6 +85,27 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 ## Development
 
 See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [Agent Instructions](AGENTS.md).
+
+## DesignFlow
+
+DesignFlow writes a visual mockup of a screen or form, stores inline comments on that mockup, and sends those comments to an agent for a revised mockup. Ported from firstmate's lavish.
+
+```bash
+codehelm designflow draft --title "Login" --brief "Sign in with email" \
+  --field "email|Email|email|required|you@example.com" \
+  --field "password|Password|password|required" \
+  --field "submit|Sign in|button"
+codehelm designflow serve login
+codehelm designflow comment login --element email --text "Say email address"
+codehelm designflow send login
+codehelm designflow revise login --provider claude --execute
+```
+
+`draft` renders the fields you pass and does not call a provider. `--spec` renders a JSON screen spec the same way. `--execute` asks the provider for that JSON and renders only a spec that validates. `comment` stores one comment on a field uid, or on `screen` for the whole mockup. Comments stay on the mockup until `send`. `send` queues them and does not launch a provider. `revise` without `--execute` prints the queued comments. With `--execute` it sends those comments to the provider, checks the returned JSON, and writes the next revision. A failed response leaves the mockup and the queued comments unchanged.
+
+`serve` listens on `127.0.0.1` only. The page lets you click an element, add a comment, and send the open comments. Sending does not launch a provider. The page names the `revise --execute` command that does. Refresh the page after that command to see the revised mockup.
+
+The agent sees the comments as reviewer evidence about the mockup. That evidence does not authorize repository edits, merges, or any other work. DesignFlow does not schedule stories and does not merge pull requests. Provider output is not written as HTML. The renderer builds the page from the validated spec.
 
 ## License
 
