@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge, automatic Jira transitions, and live usage capture. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -395,8 +395,10 @@ codehelm schedule-durable --plan-file .codehelm/plan.json \
 
 The legacy `schedule` command is still an experimental **unbudgeted**
 dispatch path; do not use it for cost-sensitive work. Reservations are
-conservative estimates, not live metering or hard CLI/provider spending
-limits. Reconcile externally verified usage using `budget-reconcile`.
+admission estimates, not guaranteed spending protection and not a
+provider-side cap. Structured CLI stdout is recorded when `parse_cli_usage`
+recognizes it; otherwise the reservation stays an estimate. Unknown USD is
+not stored as zero. Reconcile externally verified usage using `budget-reconcile`.
 The heartbeat is a process liveness signal, not proof that a model is
 progressing. There is no automatic restart of interrupted work and no
 provider-side token cap. Never treat an expired lease as permission to
@@ -415,11 +417,16 @@ codehelm usage-import PLAN-S1-A1 --provider claude \
 
 Recognizes explicit `usage.input_tokens`, `usage.output_tokens`, and
 optional `total_cost_usd` fields in a structured JSON object. Missing
-or ambiguous fields fail closed; if USD is unavailable, no reconciliation
-occurs and the original reservation is retained. Only use authentic,
-trusted provider metadata, not model-generated JSON or agent output.
+or ambiguous fields fail closed. When USD is unavailable, the command
+prints that USD is unavailable and the reservation is retained.
+`--execute` records the token count and does not store USD as zero.
+Without `--execute`, nothing is written. A recognized token and USD
+payload reconciles only with `--execute`. Only use authentic, trusted
+provider metadata, not model-generated JSON or agent output.
 CLI output formats differ across versions and may not contain these fields.
-**This is not automatic usage capture** and does not enforce live hard caps.
+Structured CLI stdout is recorded when `parse_cli_usage` recognizes it;
+otherwise the reservation stays an estimate. This does not enforce a
+provider-side cap.
 No changes are made to external GitHub/Jira resources.
 
 ## AUD additional-spend budget (v1.6)

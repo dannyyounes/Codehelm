@@ -11,8 +11,10 @@ from pathlib import Path
 import re
 import sqlite3
 
+from codehelm.orchestrator.budgets import BudgetLedger
 from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStore
 from codehelm.planning.planner import Plan
+from codehelm.providers.usage import parse_cli_usage
 from codehelm.integrations.github_pr import PullRequestError, github_pull_request_merged
 from codehelm.quality.contract import assess, decision_error, load_policy, policy_path_for
 
@@ -311,6 +313,20 @@ class DurableScheduler:
                 raise ValueError("Story is not interrupted")
             db.execute("COMMIT")
 
+    def _record_recognized_usage(self, provider: str, task_id: str, output: str) -> None:
+        """Record structured CLI stdout for this prefix.
+
+        A missing reservation does not fail the story and is not logged as a cost.
+        """
+        usage = parse_cli_usage(provider, output)
+        if usage is None:
+            return
+        try:
+            BudgetLedger(self.store.database).observe(
+                self.prefix, task_id, usage.tokens, usage.usd)
+        except ValueError:
+            return
+
     def carry_story(self, story_id: str, engine: LifecycleEngine, *, prompt: str, provider: str,
                     test_command: list[str] | None = None, security_command: list[str] | None = None,
                     reviewer: str = "", docs_provider: str = "",
@@ -344,6 +360,7 @@ class DurableScheduler:
             if heartbeat is not None and not heartbeat():
                 raise ClaimLost("Claim lost before the coding agent started")
             result = engine.execute(task_id, prompt, provider, agent_timeout)
+            self._record_recognized_usage(provider, task_id, result.output)
             if result.exit_code:
                 self.settle(story_id, "failed", result.error)
                 return "failed"

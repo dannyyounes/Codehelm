@@ -21,7 +21,9 @@ from pathlib import Path
 import sqlite3
 
 from codehelm.execution.worktrees import WorktreeManager
+from codehelm.orchestrator.budgets import BudgetLedger
 from codehelm.providers.adapters import CLIProvider, AgentResult
+from codehelm.providers.usage import parse_cli_usage
 from codehelm.quality.gates import GateResult, command_gate, independent_review
 from codehelm.quality.contract import (
     assess, decision_error, load_policy, parse_acceptance_report, policy_path_for,
@@ -421,6 +423,34 @@ class LifecycleEngine:
             acceptance_criteria=acceptance_criteria, story_id=task_id,
             implementer=(task.provider or "") if task else "")
 
+    def _sole_reserved_prefix(self, task_id: str) -> str | None:
+        """Prefix of the only reserved budget row for this task, if there is one."""
+        try:
+            with sqlite3.connect(self.store.database) as db:
+                rows = db.execute(
+                    """SELECT prefix FROM budget_reservations
+                       WHERE task_id=? AND status='reserved'""",
+                    (task_id,)).fetchall()
+        except sqlite3.OperationalError:
+            return None
+        if len(rows) != 1:
+            return None
+        return rows[0][0]
+
+    def _record_recognized_usage(self, task_id: str, provider: str, output: str) -> None:
+        """Record structured CLI stdout. Unknown output and ambiguous rows are skipped."""
+        usage = parse_cli_usage(provider, output)
+        if usage is None:
+            return
+        prefix = self._sole_reserved_prefix(task_id)
+        if prefix is None:
+            return
+        try:
+            BudgetLedger(self.store.database).observe(
+                prefix, task_id, usage.tokens, usage.usd)
+        except ValueError:
+            return
+
     def execute(self, task_id: str, prompt: str, provider: str,
                 timeout: int = 600) -> AgentResult:
         if self.store.get(task_id):
@@ -433,6 +463,7 @@ class LifecycleEngine:
             workspace = self.worktrees.create(task_id)
             self.store.transition(task_id, "running", workspace=str(workspace.path))
             result = adapter.execute(prompt, workspace.path, timeout)
+            self._record_recognized_usage(task_id, provider, result.output)
             if result.exit_code:
                 self.store.transition(task_id, "failed", exit_code=result.exit_code,
                                       error=result.error[:2000])
