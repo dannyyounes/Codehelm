@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a published container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: direct provider APIs, a published container image, automatic merge, automatic Jira transitions, and a fetched or default exchange rate. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -448,8 +448,12 @@ codehelm schedule-durable --plan-file .codehelm/plan.json --prefix PLAN \
   --additional-aud-per-task 2.50 --execute
 ```
 
-The AUD estimate is explicitly supplied per task; **no FX conversion is
-assumed**. Use `--additional-aud-per-task 0` for runs expected to incur no
+The AUD estimate is explicitly supplied per task. CodeHelm does not fetch
+an exchange rate and does not assume one. To convert a USD figure, pass
+`--additional-usd`, `--aud-per-usd`, and `--aud-rate-source` together.
+`--additional-aud-per-task` cannot be combined with that conversion.
+`aud-quote` prints the same product and writes nothing. Use
+`--additional-aud-per-task 0` for runs expected to incur no
 additional charge under an existing subscription. Budget admission and
 scheduler claim happen in one SQLite transaction. Reconciliation of actual
 additional AUD charges is supported by the ledger API. `budget-approve`

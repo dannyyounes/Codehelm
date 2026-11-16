@@ -128,7 +128,8 @@ class DurableScheduler:
 
     def claim_budgeted(self, budget: DispatchBudget, provider: str,
                        reserve_tokens: int, reserve_usd, limits,
-                       monthly_budget=None, aud_per_task=None, month=None) -> list[str]:
+                       monthly_budget=None, aud_per_task=None, month=None,
+                       aud_rate=None, aud_rate_source=None) -> list[str]:
         """Atomically claim eligible stories AND reserve their estimated budget."""
         from decimal import Decimal
         from codehelm.orchestrator.budgets import BudgetLedger
@@ -199,9 +200,11 @@ class DurableScheduler:
                 dollars_used += amount
                 if monthly_budget is not None:
                     db.execute("""INSERT INTO aud_reservations
-                        (task_id,epic,month,estimated_aud,charge_type,created_at)
-                        VALUES (?,?,?,?,'additional',?)""",
-                        (task_id,self.prefix,month,str(aud_amount),now))
+                        (task_id,epic,month,estimated_aud,charge_type,created_at,
+                         rate_aud_per_usd,rate_source)
+                        VALUES (?,?,?,?,'additional',?,?,?)""",
+                        (task_id, self.prefix, month, str(aud_amount), now,
+                         None if aud_rate is None else str(aud_rate), aud_rate_source))
                     if override_id is not None:
                         updated = db.execute(
                             """UPDATE budget_overrides SET used_at=?
