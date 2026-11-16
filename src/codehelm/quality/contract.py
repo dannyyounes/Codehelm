@@ -82,6 +82,7 @@ _POLICY_FIELDS = {
     "gate_image",
     "approval_signature",
     "approval_signers",
+    "auto_merge",
 }
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
 _ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
@@ -157,6 +158,7 @@ class QualityPolicy:
     gate_image: str = ""
     approval_signature: str = "off"
     approval_signers: str = ""
+    auto_merge: bool = False
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -198,6 +200,21 @@ class ContractDecision:
             "failures": list(self.failures),
             "requires_human": self.requires_human,
         }
+
+
+def auto_merge_block(policy: QualityPolicy, decision: ContractDecision) -> str | None:
+    """Return why a merge is refused, or None when the local contract allows it.
+
+    Auto-merge stays off unless the policy sets it. A passing score is not enough:
+    the decision must be ready_for_pr because human approval was required and recorded.
+    """
+    if not policy.present or not policy.auto_merge:
+        return "auto-merge is off"
+    if decision.failures or decision.status == "blocked":
+        return "quality gates have not all passed"
+    if decision.status != "ready_for_pr" or not decision.requires_human:
+        return "required human approval is absent"
+    return None
 
 
 def decision_error(decision: ContractDecision) -> str:
@@ -414,6 +431,10 @@ def load_policy(path: Path) -> QualityPolicy:
         risk_patterns = _load_risk_patterns(data["risk_patterns"])
     gate_runner, gate_image = _load_gate_runner(data)
     approval_signature, approval_signers = _load_approval_signature(data)
+    if "auto_merge" not in data or data["auto_merge"] is None:
+        auto_merge = False
+    else:
+        auto_merge = _require_bool(data["auto_merge"], "auto_merge")
     return QualityPolicy(
         present=True,
         schema_version=POLICY_SCHEMA_VERSION,
@@ -434,6 +455,7 @@ def load_policy(path: Path) -> QualityPolicy:
         gate_image=gate_image,
         approval_signature=approval_signature,
         approval_signers=approval_signers,
+        auto_merge=auto_merge,
     )
 
 
