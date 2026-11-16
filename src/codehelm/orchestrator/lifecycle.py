@@ -33,7 +33,7 @@ from codehelm.agents.documentation import run_documentation_agent
 from codehelm.integrations.github_pr import publish_pr
 
 # State schema 2 adds quality evidence. Policy schema_version is a separate number.
-STATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 3
 _EVIDENCE_SOURCES = {
     "tests": {"command_gate"},
     "security": {"command_gate"},
@@ -78,6 +78,7 @@ class EvidenceRow:
     detail: str
     identity: str
     attempt: int
+    signature: str = ""
 
 
 class TaskStore:
@@ -116,6 +117,7 @@ class TaskStore:
                 exit_code INTEGER,
                 detail TEXT NOT NULL DEFAULT '',
                 identity TEXT NOT NULL DEFAULT '',
+                signature TEXT NOT NULL DEFAULT '',
                 recorded_at TEXT NOT NULL
             )""")
             db.execute("""CREATE TABLE IF NOT EXISTS quality_evaluations (
@@ -139,6 +141,7 @@ class TaskStore:
                 ("exit_code", "INTEGER"),
                 ("detail", "TEXT NOT NULL DEFAULT ''"),
                 ("identity", "TEXT NOT NULL DEFAULT ''"),
+                ("signature", "TEXT NOT NULL DEFAULT ''"),
             ))
             self._ensure_columns(db, "quality_evaluations", (
                 ("attempt", "INTEGER NOT NULL DEFAULT 1"),
@@ -211,7 +214,7 @@ class TaskStore:
 
     def record_evidence(self, task_id: str, gate: str, source: str, *,
                         passed: bool, attempt: int = 1, exit_code: int | None = None,
-                        detail: str = "", identity: str = "") -> None:
+                        detail: str = "", identity: str = "", signature: str = "") -> None:
         """Persist one orchestrator-produced evidence row. Unknown sources are rejected."""
         allowed = _EVIDENCE_SOURCES.get(gate)
         if allowed is None or source not in allowed:
@@ -227,6 +230,9 @@ class TaskStore:
             raise ValueError("Human approval requires an identity")
         if gate == "human_approval" and not detail:
             raise ValueError("Human approval requires a diff digest")
+        signature = signature or ""
+        if signature and (gate != "human_approval" or "\x00" in signature or len(signature) > 8000):
+            raise ValueError("Approval signature is not valid")
         if gate in {"acceptance", "oversized_justification", "risk"} and not detail:
             raise ValueError(f"{gate} requires detail text")
         if gate == "oversized_justification" and not identity:
@@ -240,10 +246,10 @@ class TaskStore:
         timestamp = now()
         with sqlite3.connect(self.database) as db:
             db.execute("""INSERT INTO quality_evidence
-                (task_id,attempt,gate,source,passed,exit_code,detail,identity,recorded_at)
-                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (task_id,attempt,gate,source,passed,exit_code,detail,identity,signature,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (task_id, attempt, gate, source, 1 if passed else 0, exit_code,
-                 (detail or "")[:4000], identity or "", timestamp))
+                 (detail or "")[:4000], identity or "", signature, timestamp))
 
     def replace_plan_criteria(self, task_id: str, attempt: int, criteria: list[str]) -> None:
         """Store acceptance criteria taken from the validated plan, not from an agent."""
@@ -263,11 +269,13 @@ class TaskStore:
 
     def evidence_for(self, task_id: str, attempt: int) -> list[EvidenceRow]:
         with sqlite3.connect(self.database) as db:
-            rows = db.execute("""SELECT gate,source,passed,exit_code,detail,identity,attempt
+            rows = db.execute("""SELECT gate,source,passed,exit_code,detail,identity,attempt,signature
                 FROM quality_evidence WHERE task_id=? AND attempt=? ORDER BY id""",
                 (task_id, attempt)).fetchall()
-        return [EvidenceRow(gate, source, bool(passed), exit_code, detail or "", identity or "", attempt_no)
-                for gate, source, passed, exit_code, detail, identity, attempt_no in rows]
+        return [EvidenceRow(
+            gate, source, bool(passed), exit_code, detail or "", identity or "", attempt_no,
+            signature or "")
+                for gate, source, passed, exit_code, detail, identity, attempt_no, signature in rows]
 
     def record_evaluation(self, task_id: str, attempt: int, story_id: str,
                           schema_version: int | None, status: str, failures_json: str,

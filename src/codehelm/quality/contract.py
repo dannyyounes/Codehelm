@@ -27,6 +27,7 @@ import subprocess
 import yaml
 
 from codehelm.quality.diffdigest import diff_digest
+from codehelm.quality.signatures import split_signature, verify_approval_signature
 
 HIGH_RISK = frozenset({
     "authentication_changes",
@@ -60,6 +61,8 @@ _POLICY_FIELDS = {
     "risk_patterns",
     "gate_runner",
     "gate_image",
+    "approval_signature",
+    "approval_signers",
 }
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
 _ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
@@ -133,6 +136,8 @@ class QualityPolicy:
     risk_patterns: tuple[tuple[str, tuple[str, ...]], ...] = ()
     gate_runner: str = "namespace"
     gate_image: str = ""
+    approval_signature: str = "off"
+    approval_signers: str = ""
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -157,6 +162,7 @@ class QualityEvidence:
     risks: list[str] = field(default_factory=list)
     human_approved: bool = False
     approval_mismatch: bool = False
+    approval_signature_failed: bool = False
     oversized_justification: str = ""
     unresolved_findings: list[str] = field(default_factory=list)
 
@@ -218,6 +224,8 @@ def evaluate(policy: QualityPolicy, evidence: QualityEvidence) -> ContractDecisi
         failures.append("unresolved_findings")
     if evidence.approval_mismatch and not evidence.human_approved:
         failures.append("approval_diff_mismatch")
+    if evidence.approval_signature_failed and not evidence.human_approved:
+        failures.append("approval_signature_unverified")
     needs_human = bool(set(evidence.risks) & policy.human_approval_risks)
     if failures:
         status = "blocked"
@@ -249,6 +257,37 @@ def _load_architecture_cmd(value) -> tuple[str, ...]:
         raise ValueError(
             "architecture_cmd must be a nonempty list of nonempty strings with no NUL characters")
     return tuple(value)
+
+
+def _load_approval_signature(data: dict) -> tuple[str, str]:
+    """off keeps the login-and-digest approval. required demands a signature."""
+    mode = data.get("approval_signature", "off")
+    if mode is None or mode is False:
+        mode = "off"
+    if type(mode) is not str or mode not in {"off", "required"}:
+        raise ValueError("approval_signature must be off or required")
+    signers = data.get("approval_signers", "")
+    if signers is None:
+        signers = ""
+    if type(signers) is not str or "\x00" in signers or any(part == ".." for part in Path(signers).parts):
+        raise ValueError("approval_signers must be a path without parent traversal")
+    signers = signers.strip()
+    if mode == "required" and not signers:
+        raise ValueError("approval_signers is required when approval_signature is required")
+    return mode, signers
+
+
+def _signers_directory(policy: QualityPolicy, policy_dir: Path) -> Path | None:
+    raw = policy.approval_signers.strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = policy_dir / path
+    try:
+        return path.resolve()
+    except OSError:
+        return None
 
 
 def _load_gate_runner(data: dict) -> tuple[str, str]:
@@ -341,6 +380,7 @@ def load_policy(path: Path) -> QualityPolicy:
     else:
         risk_patterns = _load_risk_patterns(data["risk_patterns"])
     gate_runner, gate_image = _load_gate_runner(data)
+    approval_signature, approval_signers = _load_approval_signature(data)
     return QualityPolicy(
         present=True,
         schema_version=POLICY_SCHEMA_VERSION,
@@ -359,6 +399,8 @@ def load_policy(path: Path) -> QualityPolicy:
         risk_patterns=risk_patterns,
         gate_runner=gate_runner,
         gate_image=gate_image,
+        approval_signature=approval_signature,
+        approval_signers=approval_signers,
     )
 
 
@@ -522,12 +564,29 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         row for row in rows
         if row.gate == "human_approval" and row.source == "human" and row.passed
     ]
-    human_approved = bool(current) and any(
-        row.identity.strip() and row.detail.strip() == current for row in approvals
-    )
+    signers = _signers_directory(policy, policy_path_for(store.database).parent)
+    human_approved = False
+    signature_failed = False
+    for row in approvals:
+        digest = row.detail.strip()
+        identity = row.identity.strip()
+        if not current or not identity or digest != current:
+            continue
+        stored = row.signature or ""
+        if split_signature(stored) is None:
+            if policy.approval_signature == "required":
+                signature_failed = True
+            else:
+                human_approved = True
+            continue
+        if verify_approval_signature(stored, current, identity, signers):
+            human_approved = True
+        else:
+            signature_failed = True
     approval_mismatch = bool(current) and any(
         row.detail.strip() and row.detail.strip() != current for row in approvals
     )
+    approval_signature_failed = signature_failed and not human_approved
     recorded_risks = [
         row.detail.strip() for row in rows
         if row.gate == "risk" and row.source == "human" and row.passed and row.detail.strip()
@@ -578,6 +637,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         risks=sorted(set(recorded_risks) | set(_risks_for(changed_files, policy, workspace))),
         human_approved=human_approved,
         approval_mismatch=approval_mismatch,
+        approval_signature_failed=approval_signature_failed,
         oversized_justification=justification,
         unresolved_findings=findings,
     )
