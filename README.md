@@ -16,7 +16,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: a published container image, automatic Jira transitions, and a fetched or default exchange rate. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: automatic Jira transitions, and a fetched or default exchange rate. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -175,7 +175,8 @@ exists, can later replace `awaiting_pr` with `blocked`,
 **Security limitation:** This prototype invokes user-selected executables and
 AI CLIs directly. The default gate sandbox is a namespace, not a container
 image. An optional container runner for gate commands is off by default and
-fails closed when selected but unavailable. It does not run the coding agent
+fails closed when selected but unavailable. It can name the published GHCR
+image, and it still does not pull that image. It does not run the coding agent
 or the model reviewer. Run only on trusted code with appropriate permissions.
 The reviewer is instructed not to edit files, but the Git snapshot guard is
 not a security boundary. AI approval is not human merge authorization.
@@ -513,7 +514,9 @@ turns content scanning off. `gate_runner` defaults to `namespace`.
 It is required only when `approval_signature` is `required`.
 `gate_image` is required only when `gate_runner` is `container`; empty or
 missing in that mode fails closed, and any other `gate_runner` value fails
-closed. In namespace mode `gate_image` is ignored. `schema_version` must be
+closed. In namespace mode `gate_image` is ignored. For the published image,
+pin the digest printed by the GHCR workflow (`ghcr.io/dannyyounes/codehelm`).
+CodeHelm does not pull it. `schema_version` must be
 `1`. Unknown keys or an unknown schema version fail closed. `max_retries` is
 not a second retry loop; the enforced attempt cap remains the scheduler's
 `DispatchBudget`. An omitted `--max-attempts` uses `policy.max_retries` when
@@ -620,16 +623,23 @@ must allow them first. The coding agent and the model reviewer are not in
 that namespace. This is not a container image.
 
 An optional container runner is off by default. Set `gate_runner: container`
-and `gate_image` to a local image to run gate commands through `podman`, or
-`docker` when `podman` is not on `PATH`. The runtime is invoked with `--rm`,
-`--network=none`, dropped capabilities, `no-new-privileges`, and the workspace
-mounted. An image name that starts with a dash or contains whitespace is
-rejected. The gate
-command is passed as arguments, not through a shell, and credential
-environment variables are dropped. CodeHelm does not pull an image. If the
-runtime is missing, cannot be executed, or returns nonzero, the gate fails
-and does not run the command on the host or through `unshare`. The coding
-agent and the model reviewer are not run in that container.
+and `gate_image` to an image already present in the local `podman` store, or
+`docker` when `podman` is not on `PATH`. The published gate image is
+`ghcr.io/dannyyounes/codehelm`. The publish workflow pushes it only on pushes
+to `main` and on version tags, and it prints the image digest. Pin
+`gate_image` to that digest. This repository does not embed the digest,
+because it exists only after that workflow runs. CodeHelm does not pull the
+image, does not substitute a tag, and does not fetch the digest. If the
+digest is not already local, the gate fails. The runtime is invoked with
+`--rm`, `--network=none`, dropped capabilities, `no-new-privileges`,
+`--pull=never`, and the workspace mounted. An image name that starts with a
+dash or contains whitespace is rejected. The gate command is passed as
+arguments, not through a shell, and credential environment variables are
+dropped. If the runtime is missing, cannot be executed, or returns nonzero,
+the gate fails and does not run the command on the host or through `unshare`.
+The image contains Python, pytest, and bandit for those gate commands. The
+coding agent and the model reviewer are not run in that container and are not
+installed in that image.
 
 Each `quality-debt` row accepts one unresolved finding for the current attempt
 when a human records that finding text and a nonempty reason. More than one
@@ -638,6 +648,6 @@ waive tests, security, review, architecture, docs, acceptance, or human
 approval. A debt from another attempt does not count, and a debt whose text
 does not match a finding is ignored. Current limits: signed approval stays off until `approval_signature` is `required`. `auto_merge` stays off until it is set to `true`, and it still does not merge when human approval was not required or when any check is missing, pending, skipped, or failed. The
 container runner is optional, off by default, and fails closed when selected
-but unavailable. A passing test exit code still does not verify an unnamed
+but unavailable. Publishing `ghcr.io/dannyyounes/codehelm` does not make the gate pull it. A passing test exit code still does not verify an unnamed
 acceptance criterion. Architecture review is a second model prompt, not a
 separate deterministic checker. Budgets remain estimates, not spend protection.
