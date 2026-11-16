@@ -560,6 +560,25 @@ def jira_link_pr(
         raise typer.Exit(code=1) from exc
 
 
+@app.command("jira-transition")
+def jira_transition(
+    key: str,
+    transition_id: str = typer.Option(..., "--id", help="Jira transition id"),
+    execute: bool = typer.Option(False, help="Explicitly post one Jira transition"),
+) -> None:
+    """Post one Jira transition id. The scheduler does not call this."""
+    if not execute:
+        typer.echo(
+            f"Dry run: would post transition {transition_id} on {key}. Jira is not called.")
+        return
+    try:
+        JiraClient.from_env().transition(key, transition_id)
+        typer.echo(f"Posted Jira transition {transition_id} on {key}")
+    except JiraError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
 @app.command("task-status")
 def task_status(task_id: str) -> None:
     """Inspect persisted task state."""

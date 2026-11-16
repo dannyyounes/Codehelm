@@ -71,3 +71,17 @@ class JiraClient:
             raise JiraError("Comment must not be empty")
         return self._request("POST", "issue/" + quote(key, safe="") + "/comment",
                              {"body": self._adf(message)})
+
+    def transition(self, key: str, transition_id: str) -> dict:
+        if not key or not key.strip():
+            raise JiraError("Jira issue key is required")
+        if not transition_id or any(
+            not (character.isascii() and (character.isalnum() or character == "-"))
+            for character in transition_id
+        ):
+            raise JiraError("Transition id must contain only letters, digits, and hyphens")
+        return self._request(
+            "POST",
+            "issue/" + quote(key, safe="") + "/transitions",
+            {"transition": {"id": transition_id}},
+        )

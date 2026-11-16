@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge, automatic Jira transitions, and live usage capture. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -215,8 +215,11 @@ The command is dry-run by default. With `--execute`, CodeHelm verifies that
 the task is `awaiting_pr`, checks the worktree and branch, pushes the branch
 to `origin`, and creates a **draft** GitHub PR via `gh pr create`.
 It records `pr_created` and the returned URL. It does not merge, approve,
-or transition Jira issues. Push/PR failures retain `awaiting_pr` for
-manual inspection; retries can require checking for an existing remote PR.
+or transition Jira issues. An explicit `jira-transition` command posts one
+transition id; a dry run does not call Jira. The scheduler still does not
+transition issues or merge pull requests. Push/PR failures retain
+`awaiting_pr` for manual inspection; retries can require checking for an
+existing remote PR.
 
 **Caution:** This prototype checks for a clean tree, not that every desired
 change has been committed or that remote branch protections are configured.
@@ -233,10 +236,17 @@ codehelm jira-create --project DEV --kind Epic --summary "Authentication" --exec
 codehelm jira-create --project DEV --kind Story --summary "Login" --parent DEV-123 --execute
 codehelm jira-create --project DEV --kind Bug --summary "Fix crash" --execute
 codehelm jira-link-pr DEV-123 --execute
+codehelm jira-transition DEV-123 --id 31
+codehelm jira-transition DEV-123 --id 31 --execute
 ```
 
 `jira-link-pr` posts the recorded GitHub draft PR URL as a comment on
 a Jira issue whose key matches the task ID. It does not change Jira status.
+
+`jira-transition KEY --id TRANSITION_ID` prints a dry-run line that names
+the key and the transition id and does not call Jira. With `--execute` it
+posts that one transition id. The scheduler still does not transition issues
+or merge pull requests.
 
 **Limitations:** This is a minimal Jira Cloud REST adapter, not autonomous
 epic decomposition, bulk story scheduling, transition mapping, or a bidirectional
@@ -265,7 +275,9 @@ codehelm plan-publish --project DEV --plan-file .codehelm/plan.json --execute
 Publishing creates the Jira Epic and its Stories in dependency order,
 including resolved prerequisite issue keys in story descriptions. It does
 not launch agents, create Jira dependency links, transition issues, or
-schedule stories. **Publishing is not idempotent**: re-running can create
+schedule stories. An explicit `jira-transition` command posts one transition
+id; a dry run does not call Jira. The scheduler still does not transition
+issues or merge pull requests. **Publishing is not idempotent**: re-running can create
 duplicate Jira issues. A partial Jira failure may leave some issues
 created; inspect Jira before retrying. Live Jira operations have not
 been exercised by automated tests.
