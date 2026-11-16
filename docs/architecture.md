@@ -25,7 +25,7 @@ With no quality policy file, success ends at `awaiting_pr`. Failures persist as 
 
 With `.codehelm/quality.yaml` present, `schedule-durable` runs those gates inside the claimed attempt and then scores the contract. The manual post-documentation command does the same scoring. The task and the dispatch row become `blocked`, `awaiting_human_approval`, or `ready_for_pr`. `pr-create` is allowed only from `ready_for_pr`, and it evaluates the recorded evidence again before publishing. A failed gate does not launch the later model calls for that attempt.
 
-Story completion in the durable scheduler is a separate manual step. It requires a recorded draft PR and `--confirmed-merged`. CodeHelm does not query GitHub for merge status. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion.
+Story completion in the durable scheduler is a separate step. It requires a recorded pull request, `--confirmed-merged`, and `gh pr view` reporting `state=MERGED` with a merged timestamp. An open or closed pull request does not complete the story. When a quality policy is active it also requires the latest evaluation for that attempt to be `ready_for_pr`. Dependents stay locked until that completion. CodeHelm does not merge the pull request.
 
 ## Durable scheduling
 

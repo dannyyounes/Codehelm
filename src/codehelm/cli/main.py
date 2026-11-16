@@ -349,10 +349,10 @@ def schedule_complete(
     story_id: str,
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
     prefix: str = typer.Option("PLAN"),
-    confirmed_merged: bool = typer.Option(False, help="Human confirms PR merged and gates satisfied"),
+    confirmed_merged: bool = typer.Option(False, help="Operator asks to complete after GitHub reports the PR merged"),
     execute: bool = typer.Option(False),
 ) -> None:
-    """Manually unlock dependencies only after a verified merged PR."""
+    """Unlock dependencies only when gh reports the recorded pull request merged."""
     if not execute or not confirmed_merged:
         typer.echo("No change. Requires --confirmed-merged --execute after verifying the PR.")
         return

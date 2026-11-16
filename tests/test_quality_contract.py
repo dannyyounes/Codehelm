@@ -379,7 +379,8 @@ def test_interrupted_attempt_evidence_does_not_resume(tmp_path):
     with pytest.raises(ValueError, match="draft PR"):
         scheduler.complete("S1", human_verified_merge=True)
     scheduler.store.transition(task_id, "pr_created", error="https://github.com/example/repo/pull/4")
-    scheduler.complete("S1", human_verified_merge=True)
+    with patch("codehelm.orchestrator.durable.github_pull_request_merged"):
+        scheduler.complete("S1", human_verified_merge=True)
     assert scheduler.snapshot()["S1"][0] == "completed"
     assert scheduler.claim(DispatchBudget()) == ["S2"]
 
