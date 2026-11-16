@@ -1,10 +1,12 @@
 """Digest of a workspace change. Not a signature of a person.
 
 The value is ``sha256:`` plus the hex sha256 of a canonical payload: the exact
-stdout of ``git diff HEAD``, then each untracked non-ignored path from
-``git status --porcelain -uall`` in sorted order. Each untracked path is
-followed by that file's bytes. Lengths keep two different trees from hashing
-to the same payload. Host secrets are not taken from the environment.
+stdout of ``git diff --binary --no-ext-diff --no-textconv HEAD``, then each
+untracked non-ignored path from ``git status --porcelain -uall`` in sorted
+order. Each untracked path is followed by that file's bytes. ``--binary``
+keeps two tracked binary edits from sharing one digest. Lengths keep two
+different trees from hashing to the same payload. Git runs without host
+config or credential environment variables.
 """
 from pathlib import Path
 import hashlib
@@ -19,6 +21,8 @@ def _git_env() -> dict[str, str]:
         "LC_ALL": "C",
         "LANG": "C",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
     }
 
 
@@ -139,7 +143,7 @@ def diff_digest(workspace: Path | None) -> str:
     if workspace is None or not Path(workspace).is_dir():
         return ""
     workspace = Path(workspace)
-    diff = _run_git(workspace, ["diff", "HEAD"])
+    diff = _run_git(workspace, ["diff", "--binary", "--no-ext-diff", "--no-textconv", "HEAD"])
     if diff is None:
         return ""
     status = _run_git(workspace, ["status", "--porcelain", "-uall"])

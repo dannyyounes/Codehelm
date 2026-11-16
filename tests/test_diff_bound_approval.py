@@ -172,6 +172,19 @@ def test_digest_fails_closed_and_ignores_ignored_files(tmp_path):
     assert diff_digest(repo) == linked
 
 
+def test_tracked_binary_edits_do_not_share_a_digest(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    blob = repo / "app.bin"
+    blob.write_bytes(b"\x00\x01\x02")
+    git(repo, "add", "app.bin")
+    git(repo, "commit", "-m", "bin")
+    blob.write_bytes(b"\x00\x01\x03")
+    first = diff_digest(repo)
+    blob.write_bytes(b"\x00\x01\x04")
+    assert first.startswith("sha256:")
+    assert diff_digest(repo) != first
+
+
 def test_approve_without_workspace_does_not_record(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".codehelm").mkdir()
