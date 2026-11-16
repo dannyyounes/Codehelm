@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: direct provider APIs, a published container image, automatic merge, and automatic Jira transitions. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. It is not a cryptographic signature of the person. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -104,7 +104,7 @@ codehelm agent-run --provider claude --workspace ../codehelm-worktrees/DEV-123 -
 
 Supported initial CLI names: `claude`, `codex`, `gemini`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
 
-**Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. Direct provider APIs and a container sandbox are still absent.
+**Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. Direct provider APIs are still absent.
 
 ## Single-task lifecycle (v0.4)
 
@@ -128,7 +128,7 @@ in v1.2 and uses a new task id.
 PR creation, Jira REST operations, provider APIs, agent crash recovery,
 live event streaming, token budgets and container sandboxing. Gates, draft
 PRs, Jira REST, durable retry, and estimated budgets were added in later
-milestones. Direct provider APIs and a container sandbox are still absent.
+milestones. Direct provider APIs are still absent.
 Provider CLIs can execute code and incur charges; use trusted workspaces and
 provider permission settings.
 
@@ -158,10 +158,12 @@ exists, can later replace `awaiting_pr` with `blocked`,
 `awaiting_human_approval`, or `ready_for_pr`.
 
 **Security limitation:** This prototype invokes user-selected executables and
-AI CLIs directly, without a container sandbox. Run only on trusted code with
-appropriate permissions. The reviewer is instructed not to edit files, but the
-Git snapshot guard is not a security boundary. AI approval is not human merge
-authorization.
+AI CLIs directly. The default gate sandbox is a namespace, not a container
+image. An optional container runner for gate commands is off by default and
+fails closed when selected but unavailable. It does not run the coding agent
+or the model reviewer. Run only on trusted code with appropriate permissions.
+The reviewer is instructed not to edit files, but the Git snapshot guard is
+not a security boundary. AI approval is not human merge authorization.
 
 ## Documentation Agent (v0.6)
 
@@ -483,10 +485,14 @@ human_approval_risks:
 ```
 
 Omitted keys use those defaults. `architecture_cmd` and `risk_patterns` are
-optional and empty when omitted. `schema_version` must be `1`. Unknown keys
-or an unknown schema version fail closed. `max_retries` is not a second retry
-loop; the enforced attempt cap remains the scheduler's `DispatchBudget`. An
-omitted `--max-attempts` uses `policy.max_retries` when the policy file exists.
+optional and empty when omitted. `gate_runner` defaults to `namespace`.
+`gate_image` is required only when `gate_runner` is `container`; empty or
+missing in that mode fails closed, and any other `gate_runner` value fails
+closed. In namespace mode `gate_image` is ignored. `schema_version` must be
+`1`. Unknown keys or an unknown schema version fail closed. `max_retries` is
+not a second retry loop; the enforced attempt cap remains the scheduler's
+`DispatchBudget`. An omitted `--max-attempts` uses `policy.max_retries` when
+the policy file exists.
 
 Evidence is taken from rows the orchestrator writes after it runs a check,
 and from `git`. An agent-written evidence JSON file is rejected.
@@ -579,13 +585,25 @@ unprivileged user namespaces, including a default GitHub-hosted runner,
 must allow them first. The coding agent and the model reviewer are not in
 that namespace. This is not a container image.
 
+An optional container runner is off by default. Set `gate_runner: container`
+and `gate_image` to a local image to run gate commands through `podman`, or
+`docker` when `podman` is not on `PATH`. The runtime is invoked with `--rm`,
+`--network=none`, dropped capabilities, `no-new-privileges`, and the workspace
+mounted. An image name that starts with a dash or contains whitespace is
+rejected. The gate
+command is passed as arguments, not through a shell, and credential
+environment variables are dropped. CodeHelm does not pull an image. If the
+runtime is missing, cannot be executed, or returns nonzero, the gate fails
+and does not run the command on the host or through `unshare`. The coding
+agent and the model reviewer are not run in that container.
+
 Each `quality-debt` row accepts one unresolved finding for the current attempt
 when a human records that finding text and a nonempty reason. More than one
 debt can be recorded. It does not
 waive tests, security, review, architecture, docs, acceptance, or human
 approval. A debt from another attempt does not count, and a debt whose text
-does not match a finding is ignored. Current limits: no signed approval, and
-no container image around the gate commands. A passing test exit code still
-does not verify an unnamed acceptance criterion. Architecture review is a
-second model prompt, not a separate deterministic checker. Budgets remain
-estimates, not spend protection.
+does not match a finding is ignored. Current limits: no signed approval. The
+container runner is optional, off by default, and fails closed when selected
+but unavailable. A passing test exit code still does not verify an unnamed
+acceptance criterion. Architecture review is a second model prompt, not a
+separate deterministic checker. Budgets remain estimates, not spend protection.

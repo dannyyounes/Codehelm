@@ -34,30 +34,83 @@ def _sandbox_env() -> dict[str, str]:
     }
 
 
-def command_gate(workspace: Path, command: list[str], timeout: int = 300) -> GateResult:
-    """Run an argv command in a namespace sandbox. No shell, and no unsandboxed fallback."""
-    if not command:
-        return GateResult(False, "No command configured")
-    if any(not isinstance(part, str) or "\x00" in part or part == "" and index == 0
-           for index, part in enumerate(command)):
-        return GateResult(False, "Command arguments must be strings without NULs")
-    if shutil.which("unshare") is None:
-        return GateResult(False, "Sandbox unavailable: unshare is not installed")
-    if not Path(workspace).is_dir():
-        return GateResult(False, "Workspace missing")
+_RUNNERS = frozenset({"namespace", "container"})
+
+
+def _run_argv(argv: list[str], workspace: Path, timeout: int) -> GateResult:
+    """Run argv with the credential environment removed. Never through a shell."""
     try:
         result = subprocess.run(
-            ["unshare", "--user", "--map-root-user", "--mount", "--propagation", "private",
-             "--pid", "--fork", "--net", "--mount-proc", "--",
-             sys.executable, "-m", "codehelm.quality.sandbox", str(Path(workspace).resolve()),
-             "--", *command],
-            cwd=workspace, env=_sandbox_env(), capture_output=True,
+            argv, cwd=workspace, env=_sandbox_env(), capture_output=True,
             text=True, timeout=timeout, shell=False)
         return GateResult(result.returncode == 0,
                           (result.stdout + "\n" + result.stderr)[-4000:],
                           result.returncode)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return GateResult(False, str(exc))
+
+
+def _namespace_gate(workspace: Path, command: list[str], timeout: int) -> GateResult:
+    """Existing unshare sandbox. A missing unshare does not run the command on the host."""
+    if shutil.which("unshare") is None:
+        return GateResult(False, "Sandbox unavailable: unshare is not installed")
+    if not Path(workspace).is_dir():
+        return GateResult(False, "Workspace missing")
+    return _run_argv(
+        ["unshare", "--user", "--map-root-user", "--mount", "--propagation", "private",
+         "--pid", "--fork", "--net", "--mount-proc", "--",
+         sys.executable, "-m", "codehelm.quality.sandbox", str(Path(workspace).resolve()),
+         "--", *command],
+        workspace, timeout)
+
+
+def _container_runtime() -> str | None:
+    """podman first, then docker. Neither means the gate cannot run."""
+    for name in ("podman", "docker"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _container_gate(workspace: Path, command: list[str], timeout: int, image: str) -> GateResult:
+    """Run the command only through a local container runtime. No image pull and no unshare fallback."""
+    if not isinstance(image, str) or not image.strip() or "\x00" in image:
+        return GateResult(False, "Container runner requires gate_image")
+    image = image.strip()
+    if image.startswith("-") or any(character.isspace() for character in image):
+        return GateResult(False, "Container runner requires a local image name")
+    if not Path(workspace).is_dir():
+        return GateResult(False, "Workspace missing")
+    runtime = _container_runtime()
+    if runtime is None:
+        return GateResult(False, "Container runner unavailable: podman and docker are not installed")
+    resolved = Path(workspace).resolve()
+    # --pull=never refuses a registry fetch. The command follows the image as argv.
+    argv = [
+        runtime, "run", "--rm", "--network=none", "--cap-drop=ALL",
+        "--security-opt=no-new-privileges", "--pull=never",
+        "--volume", f"{resolved}:{resolved}",
+        "--workdir", str(resolved),
+        image,
+        *command,
+    ]
+    return _run_argv(argv, workspace, timeout)
+
+
+def command_gate(workspace: Path, command: list[str], timeout: int = 300, *,
+                 runner: str = "namespace", image: str = "") -> GateResult:
+    """Run an argv command in the selected sandbox. No shell, and no unsandboxed fallback."""
+    if not command:
+        return GateResult(False, "No command configured")
+    if any(not isinstance(part, str) or "\x00" in part or part == "" and index == 0
+           for index, part in enumerate(command)):
+        return GateResult(False, "Command arguments must be strings without NULs")
+    if runner not in _RUNNERS:
+        return GateResult(False, "Unknown gate runner")
+    if runner == "container":
+        return _container_gate(workspace, command, timeout, image)
+    return _namespace_gate(workspace, command, timeout)
 
 
 def git_snapshot(workspace: Path) -> str:

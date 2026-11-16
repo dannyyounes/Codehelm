@@ -14,7 +14,9 @@ current attempt when its text matches. It does not waive tests, security,
 review, architecture, docs, acceptance, or human approval.
 An optional architecture command is a separate command_gate result and does not
 replace the model architecture review. Content risk patterns are optional; when
-none are configured, only path globs classify risk.
+none are configured, only path globs classify risk. gate_runner selects the
+namespace sandbox unless it is container. gate_image is required only then.
+Any other runner fails closed. In namespace mode gate_image is ignored.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +58,8 @@ _POLICY_FIELDS = {
     "risk_paths",
     "architecture_cmd",
     "risk_patterns",
+    "gate_runner",
+    "gate_image",
 }
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
 _ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
@@ -127,6 +131,8 @@ class QualityPolicy:
     risk_paths: tuple[tuple[str, tuple[str, ...]], ...] = _DEFAULT_RISK_PATHS
     architecture_cmd: tuple[str, ...] = ()
     risk_patterns: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    gate_runner: str = "namespace"
+    gate_image: str = ""
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -245,6 +251,25 @@ def _load_architecture_cmd(value) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _load_gate_runner(data: dict) -> tuple[str, str]:
+    """namespace is the default. container requires a nonempty local image name."""
+    if "gate_runner" not in data or data["gate_runner"] is None:
+        runner = "namespace"
+    else:
+        runner = data["gate_runner"]
+    if type(runner) is not str or runner not in {"namespace", "container"}:
+        raise ValueError("gate_runner must be namespace or container")
+    if runner == "namespace":
+        return "namespace", ""
+    image = data.get("gate_image")
+    if type(image) is not str or not image.strip() or "\x00" in image:
+        raise ValueError("gate_image is required when gate_runner is container")
+    image = image.strip()
+    if image.startswith("-") or any(character.isspace() for character in image):
+        raise ValueError("gate_image must be a local image name, not a runtime flag")
+    return "container", image
+
+
 def _load_risk_patterns(value) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """A present mapping is compiled now. An invalid regex fails the policy load."""
     if not isinstance(value, dict) or not value:
@@ -315,6 +340,7 @@ def load_policy(path: Path) -> QualityPolicy:
         risk_patterns = ()
     else:
         risk_patterns = _load_risk_patterns(data["risk_patterns"])
+    gate_runner, gate_image = _load_gate_runner(data)
     return QualityPolicy(
         present=True,
         schema_version=POLICY_SCHEMA_VERSION,
@@ -331,6 +357,8 @@ def load_policy(path: Path) -> QualityPolicy:
         risk_paths=risk_paths,
         architecture_cmd=architecture_cmd,
         risk_patterns=risk_patterns,
+        gate_runner=gate_runner,
+        gate_image=gate_image,
     )
 
 
