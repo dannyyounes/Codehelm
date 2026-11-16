@@ -416,6 +416,7 @@ subscription fees or model-reported USD estimates.
 
 ```bash
 codehelm monthly-budget
+codehelm budget-approve TASK --epic EPIC --amount 2.50 --approver LOGIN --reason TEXT
 codehelm schedule-durable --plan-file .codehelm/plan.json --prefix PLAN \
   --provider claude --max-parallel 2 --reserve-tokens 20000 \
   --reserve-usd 1.50 --limit-tokens 100000 --limit-usd 10 \
@@ -426,10 +427,12 @@ The AUD estimate is explicitly supplied per task; **no FX conversion is
 assumed**. Use `--additional-aud-per-task 0` for runs expected to incur no
 additional charge under an existing subscription. Budget admission and
 scheduler claim happen in one SQLite transaction. Reconciliation of actual
-additional AUD charges is supported by the ledger API, but automatic provider
-billing reconciliation and an interactive approval/override workflow are
-not yet implemented. This is an admission pause, not a hard provider cap.
-The legacy `schedule` command does not use these controls.
+additional AUD charges is supported by the ledger API. `budget-approve`
+records a GitHub login and a reason for one exact task, epic, and amount. A
+dry run does not call GitHub. It does not raise the standing cap, and it is
+not spend protection or billing reconciliation. Automatic provider billing
+reconciliation is not implemented. This is an admission pause, not a hard
+provider cap. The legacy `schedule` command does not use these controls.
 
 ## Quality contract (v1.7)
 
