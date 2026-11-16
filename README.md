@@ -525,8 +525,10 @@ Test and security commands run through `unshare` with a private user, mount,
 pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The
 workspace is bind-mounted back, and credential environment variables are
 dropped. If `unshare` is missing or the namespace cannot be created, the gate
-fails and the command does not run outside the sandbox. The coding agent and
-the model reviewer are not in that namespace. This is not a container image.
+fails and the command does not run outside the sandbox. Hosts that block
+unprivileged user namespaces, including a default GitHub-hosted runner,
+must allow them first. The coding agent and the model reviewer are not in
+that namespace. This is not a container image.
 
 Current limits: no quality-debt register, no signed approval, and no container
 image around the gate commands. A passing test exit code still does not
