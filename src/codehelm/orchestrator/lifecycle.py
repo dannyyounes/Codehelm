@@ -6,7 +6,8 @@ When `.codehelm/quality.yaml` is present, the durable scheduler can run those
 gates itself. Recorded evidence then decides blocked, awaiting_human_approval
 or ready_for_pr before a pull request. Acceptance is a test-report line or an
 operator attestation. Human approval is the GitHub login recorded by
-quality-approve.
+quality-approve. A quality debt recorded by quality-debt accepts one
+unresolved finding for the current attempt and does not waive the other gates.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ _EVIDENCE_SOURCES = {
     "oversized_justification": {"human"},
     "finding": {"independent_review", "human"},
     "risk": {"human"},
+    "quality_debt": {"human"},
 }
 
 
@@ -183,13 +185,15 @@ class TaskStore:
             raise ValueError(f"Untrusted evidence source: {gate}/{source}")
         if attempt < 1:
             raise ValueError("Attempt must be positive")
-        if gate in {"acceptance", "oversized_justification", "risk"}:
+        if gate in {"acceptance", "oversized_justification", "risk", "quality_debt"}:
             detail = (detail or "").strip()
         identity = (identity or "").strip()
         if gate == "human_approval" and (not passed or not identity):
             raise ValueError("Human approval requires an identity")
         if gate in {"acceptance", "oversized_justification", "risk"} and not detail:
             raise ValueError(f"{gate} requires detail text")
+        if gate == "quality_debt" and (passed is not True or not detail or not identity):
+            raise ValueError("Quality debt requires a passing finding and a reason")
         if gate in {"tests", "security"} and passed and exit_code != 0:
             raise ValueError(f"{gate} pass requires exit code 0")
         timestamp = now()

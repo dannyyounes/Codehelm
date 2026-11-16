@@ -15,7 +15,7 @@ Implemented in this repository:
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, live usage capture, and a quality-debt register. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
+Not implemented: direct provider APIs, a container image, automatic merge or Jira transitions, and live usage capture. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. High-risk approval records the authenticated GitHub login; it does not sign the diff. A successful agent exit does not complete a story. Budget figures are admission estimates, not a provider-side spending cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -469,6 +469,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Diff size and risk paths | `git` numstat plus policy globs | Repository state |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` records the login from `gh api user` | Checked when the row is written. Not a signature of the diff, and not re-checked on later scoring |
+| Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
 | Oversized-change justification | Operator attestation | Not authenticated |
 
 A test verifies one criterion only by emitting this line on stdout or stderr, or by creating or changing `.codehelm/acceptance-report.txt` in the workspace while it runs:
@@ -507,14 +508,15 @@ codehelm quality-attest PLAN-S1-A1 --criterion "Works" --execute
 codehelm validate-after-docs PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
 codehelm schedule-quality S1 --plan-file .codehelm/plan.json --prefix PLAN --execute
 codehelm quality-approve PLAN-S1-A1 --approver YOUR_GITHUB_LOGIN --execute
+codehelm quality-debt PLAN-S1-A1 --finding "the finding text" --reason "why this finding can wait" --execute
 ```
 
 `schedule-durable --execute` runs the gate commands and model reviews once per
 attempt while the claim is held. It does not repeat a stage that already
 passed for that attempt. `schedule-quality` does not re-run pytest, bandit,
 or the reviewer. It only reads evidence those commands already recorded.
-Missing evidence blocks the story. Re-scoring after `quality-attest` or
-`quality-approve` does not spend another reviewer call.
+Missing evidence blocks the story. Re-scoring after `quality-attest`,
+`quality-approve`, or `quality-debt` does not spend another reviewer call.
 
 `quality-approve --execute` asks `gh api user` for the current login and
 records that login only when `--approver` matches it exactly. A dry run does
@@ -530,8 +532,13 @@ unprivileged user namespaces, including a default GitHub-hosted runner,
 must allow them first. The coding agent and the model reviewer are not in
 that namespace. This is not a container image.
 
-Current limits: no quality-debt register, no signed approval, and no container
-image around the gate commands. A passing test exit code still does not
-verify an unnamed acceptance criterion. Architecture review is a second model
-prompt, not a separate deterministic checker. Budgets remain estimates, not
-spend protection.
+Each `quality-debt` row accepts one unresolved finding for the current attempt
+when a human records that finding text and a nonempty reason. More than one
+debt can be recorded. It does not
+waive tests, security, review, architecture, docs, acceptance, or human
+approval. A debt from another attempt does not count, and a debt whose text
+does not match a finding is ignored. Current limits: no signed approval, and
+no container image around the gate commands. A passing test exit code still
+does not verify an unnamed acceptance criterion. Architecture review is a
+second model prompt, not a separate deterministic checker. Budgets remain
+estimates, not spend protection.
