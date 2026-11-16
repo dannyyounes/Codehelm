@@ -564,7 +564,7 @@ A test verifies one criterion only by emitting this line on stdout or stderr, or
 CODEHELM_ACCEPTANCE	<exact planned criterion>	passed
 ```
 
-`failed` records the criterion as not verified. A line left in that file before the test process starts is ignored. Pytest's default capture hides `print`, so a wrapper that runs `pytest -s`, or the report file, is what the single-executable `--test-cmd` can use. `quality-attest` still records an operator attestation. A criterion with neither is unverified. A failed report line cancels a passed report line for that criterion. It does not cancel an operator attestation.
+`failed` records the criterion as not verified. A line left in that file before the test process starts is ignored. Pytest's default capture hides `print`, so a wrapper that runs `pytest -s`, or the report file, is what the single-executable `--test-cmd` can use. `quality-attest` still records an operator attestation. When this attempt already has planned criteria, the attested text must be one of them. Without a stored plan, the attestation is still recorded. A criterion with neither is unverified. A failed report line cancels a passed report line for that criterion. It does not cancel an operator attestation.
 
 Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
 `infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
@@ -580,7 +580,9 @@ matches neither a path glob nor a content pattern is not detected unless an
 operator records it.
 
 Architecture review is still a model verdict. When that review is required, an
-optional `architecture_cmd` runs first and must also exit 0. It does not
+optional `architecture_cmd` runs first and must also exit 0. `schedule-durable`
+and `validate-after-docs` both run that command before the model review. A
+failing command does not launch the model review. The command does not
 replace the review. Turning architecture review off skips the command.
 
 When the policy file exists, `validate-after-docs` and `schedule-quality --execute`

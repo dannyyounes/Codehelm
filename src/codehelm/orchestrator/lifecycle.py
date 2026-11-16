@@ -604,7 +604,14 @@ class LifecycleEngine:
         if not verdict.passed and not policy.present:
             self.store.transition(task_id, "changes_requested", error=verdict.detail[:2000])
             return False
-        if policy.present and policy.require_architecture and verdict.passed:
+        run_architecture = policy.present and policy.require_architecture and verdict.passed
+        if run_architecture and policy.architecture_cmd:
+            check = self._run_named_command(
+                task_id, attempt, workspace, "architecture_check",
+                list(policy.architecture_cmd), timeout, "validating_architecture_check")
+            if not check.passed:
+                run_architecture = False
+        if run_architecture:
             self.store.transition(task_id, "reviewing_architecture")
             try:
                 architecture = independent_review(
