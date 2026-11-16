@@ -382,7 +382,10 @@ class LifecycleEngine:
                            command: list[str], timeout: int, status: str) -> GateResult:
         report_before = read_acceptance_report(workspace) if gate == "tests" else None
         self.store.transition(task_id, status)
-        result = command_gate(workspace, list(command), timeout)
+        policy = self._policy()
+        result = command_gate(
+            workspace, list(command), timeout,
+            runner=policy.gate_runner, image=policy.gate_image)
         detail = f"argv={list(command)!r}\n{result.detail}"
         self._record_gate(task_id, attempt, gate, "command_gate",
                           GateResult(result.passed, detail, result.exit_code))
