@@ -2,8 +2,10 @@
 
 Agent-written evidence JSON is not accepted. Test, security, review, documentation
 and diff inputs come from rows the orchestrator stored after running those checks,
-or from git. Acceptance verification, human approval and oversized-change
-justification are explicit operator attestations and are labeled as such.
+or from git. A passing test exit code does not verify acceptance criteria. A
+criterion counts only when the test process the orchestrator ran emits a
+CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval and
+oversized-change justification stay operator attestations.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +45,41 @@ _POLICY_FIELDS = {
     "risk_paths",
 }
 _ATTEMPT = re.compile(r"-A([1-9][0-9]*)$")
+_ACCEPTANCE_LINE = re.compile(r"^CODEHELM_ACCEPTANCE\t([^\t]+)\t(passed|failed)$")
+_ACCEPTANCE_REPORT_LIMIT = 65536
+
+
+def parse_acceptance_report(text: str) -> dict[str, bool]:
+    """Parse CODEHELM_ACCEPTANCE lines. A failed line wins over a passed one."""
+    found: dict[str, bool] = {}
+    if not text:
+        return found
+    for raw in text.splitlines():
+        match = _ACCEPTANCE_LINE.match(raw.strip())
+        if not match:
+            continue
+        criterion = match.group(1).strip()
+        if not criterion:
+            continue
+        ok = match.group(2) == "passed"
+        if criterion in found:
+            found[criterion] = found[criterion] and ok
+        else:
+            found[criterion] = ok
+    return found
+
+
+def read_acceptance_report(workspace: Path) -> str | None:
+    """Read the workspace report written by a test process. Oversized files are ignored."""
+    path = Path(workspace) / ".codehelm" / "acceptance-report.txt"
+    if not path.is_file():
+        return None
+    try:
+        if path.stat().st_size > _ACCEPTANCE_REPORT_LIMIT:
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
 
 
 def task_attempt(task_id: str) -> int:
@@ -327,10 +364,19 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
             if row.gate == "acceptance_planned" and row.source == "plan" and row.detail.strip()
         ]
     rows = store.evidence_for(task_id, attempt)
-    verified = [
-        row.detail for row in rows
+    human_verified = {
+        row.detail.strip() for row in rows
         if row.gate == "acceptance" and row.source == "human" and row.passed and row.detail.strip()
-    ]
+    }
+    report_passed = {
+        row.detail.strip() for row in rows
+        if row.gate == "acceptance" and row.source == "test_report" and row.passed and row.detail.strip()
+    }
+    report_failed = {
+        row.detail.strip() for row in rows
+        if row.gate == "acceptance" and row.source == "test_report" and not row.passed and row.detail.strip()
+    }
+    verified = sorted(human_verified | (report_passed - report_failed))
     findings = [
         row.detail for row in rows
         if row.gate == "finding" and row.source in {"independent_review", "human"}

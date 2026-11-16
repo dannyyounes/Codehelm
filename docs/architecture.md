@@ -55,7 +55,7 @@ Policy file: `.codehelm/quality.yaml` with `schema_version: 1`. If the file is a
 | Independent review, architecture review | `independent_review` (exact `APPROVED` line, different provider, snapshot unchanged) | Model verdict recorded by the orchestrator |
 | Documentation | documentation agent file-hash check | Process result |
 | Diff size and risk paths | `git` status/diff plus policy globs | Repository state |
-| Acceptance criteria | `quality-attest` (`source=human`) | Operator attestation, not inferred from tests |
+| Acceptance criteria | `quality-attest` (`source=human`) or a `CODEHELM_ACCEPTANCE` line captured from the test process (`source=test_report`) | A passing exit code alone verifies nothing. A report file is used only when that process creates or changes it |
 | Human approval, oversized justification | `quality-approve` or a stored justification | Operator attestation, not authenticated |
 
 `record_evidence` rejects any other source, including an agent-supplied JSON document. Outcomes are appended to `quality_evaluations` and copied onto the task and, from `schedule-quality --execute`, the dispatch row.

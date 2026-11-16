@@ -327,9 +327,12 @@ When `.codehelm/quality.yaml` exists, that same claim continues through the
 test, security, review, documentation, and post-documentation gates before
 the dispatch row is released. The story then becomes `blocked`,
 `awaiting_human_approval`, or `ready_for_pr` from the recorded evidence.
-Passing tests do not attest acceptance criteria, and a high-risk path does
-not approve itself. With no policy file, a successful agent still stops at
-`awaiting_validation`. An interrupted coding agent is not relaunched.
+A passing test exit code does not attest acceptance criteria. The test
+process can verify a criterion by printing a `CODEHELM_ACCEPTANCE` line, or
+by writing that line to `.codehelm/acceptance-report.txt` during the run. A
+high-risk path does not approve itself. With no policy file, a successful
+agent still stops at `awaiting_validation`. An interrupted coding agent is
+not relaunched.
 `schedule-durable` can resume an interrupted story on the same attempt only
 after the agent has already finished, and it skips gates that already passed.
 `schedule-retry` still starts a new attempt for a failed, blocked, or
@@ -462,8 +465,16 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check | A real workspace check |
 | Diff size and risk paths | `git` numstat plus policy globs | Repository state |
-| Acceptance criteria | Operator attestation via `quality-attest` | Not inferred from a green test run |
+| Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval and oversized-change justification | Operator attestation via `quality-approve` or a recorded justification | Not authenticated and not signed |
+
+A test verifies one criterion only by emitting this line on stdout or stderr, or by creating or changing `.codehelm/acceptance-report.txt` in the workspace while it runs:
+
+```text
+CODEHELM_ACCEPTANCE	<exact planned criterion>	passed
+```
+
+`failed` records the criterion as not verified. A line left in that file before the test process starts is ignored. Pytest's default capture hides `print`, so a wrapper that runs `pytest -s`, or the report file, is what the single-executable `--test-cmd` can use. `quality-attest` still records an operator attestation. A criterion with neither is unverified. A failed report line cancels a passed report line for that criterion. It does not cancel an operator attestation.
 
 Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
 `infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
