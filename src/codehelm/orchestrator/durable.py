@@ -334,7 +334,8 @@ class DurableScheduler:
                     test_command: list[str] | None = None, security_command: list[str] | None = None,
                     reviewer: str = "", docs_provider: str = "",
                     heartbeat: Callable[[], bool] | None = None,
-                    timeout: int = 300, agent_timeout: int = 600) -> str:
+                    timeout: int = 300, agent_timeout: int = 600,
+                    transport: str = "cli") -> str:
         """Advance one claimed story. Quality gates run only when a policy file exists.
 
         The coding agent is started only when this attempt has no task row yet.
@@ -362,8 +363,10 @@ class DurableScheduler:
         if task is None:
             if heartbeat is not None and not heartbeat():
                 raise ClaimLost("Claim lost before the coding agent started")
-            result = engine.execute(task_id, prompt, provider, agent_timeout)
-            self._record_recognized_usage(provider, task_id, result.output)
+            result = engine.execute(
+                task_id, prompt, provider, agent_timeout, transport=transport)
+            if transport != "http":
+                self._record_recognized_usage(provider, task_id, result.output)
             if result.exit_code:
                 self.settle(story_id, "failed", result.error)
                 return "failed"

@@ -10,12 +10,13 @@ Implemented in this repository:
 
 - Local configuration, SQLite task state, and Git worktree isolation
 - Claude Code, Codex, and Gemini CLI adapters
+- Opt-in HTTP transport for those same three providers, off unless `--transport http` is set
 - Single-task lifecycle, dependency-aware dispatch, and a durable SQLite scheduler with bounded attempts, leases, and explicit retry
 - Estimated token/USD reservations and an additional-AUD admission budget
 - Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 
-Not implemented: direct provider APIs, a published container image, automatic Jira transitions, and a fetched or default exchange rate. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+Not implemented: a published container image, automatic Jira transitions, and a fetched or default exchange rate. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler still does not transition issues or merge pull requests. `merge-ready` is off unless `auto_merge: true`. It merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. It does not pull or publish an image. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the workspace diff. A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -104,7 +105,21 @@ codehelm agent-run --provider claude --workspace ../codehelm-worktrees/DEV-123 -
 
 Supported initial CLI names: `claude`, `codex`, `gemini`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
 
-**Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. Direct provider APIs are still absent.
+**Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. An opt-in HTTP transport for the same three providers was added later and is off by default. The CLI adapters remain the default.
+
+## Opt-in HTTP transport
+
+HTTP is off by default. `run`, `agent-run`, `schedule`, and `schedule-durable` accept `--transport cli` (the default) or `--transport http`. A dry run does not call the network. Selecting HTTP does not fall back to the CLI. A missing or invalid URL, token, model, or response raises an error and does not launch a provider process.
+
+The endpoint, bearer token, and model are read only from these environment variables, and only when HTTP is selected. There is no default host, model, or token.
+
+- Claude: `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, `CODEHELM_CLAUDE_MODEL`
+- Codex: `CODEHELM_CODEX_API_URL`, `CODEHELM_CODEX_API_TOKEN`, `CODEHELM_CODEX_MODEL`
+- Gemini: `CODEHELM_GEMINI_API_URL`, `CODEHELM_GEMINI_API_TOKEN`, `CODEHELM_GEMINI_MODEL`
+
+The token is sent in the `Authorization: Bearer` header. It is not placed in the URL, the prompt, or the error text. Each request uses one fixed JSON body and does not cover every provider feature. Claude sends `model`, `max_tokens` 1024, and the prompt as the user message, plus the header `anthropic-version: 2023-06-01`. That pinned header is the value this client sends; it is not a promise that the value matches every future account. Codex sends `model` and `input`. Gemini sends the prompt as a user content part and does not copy the model into that JSON or the query string. The operator-supplied URL is posted to as given, and the Gemini token is not added to the query string.
+
+A response is success only for HTTP 200, and only when the documented text field is present (`content[].text`, `output_text`, or `candidates[0].content.parts[].text`). Multiple text parts are concatenated. Any other shape is an error. CodeHelm does not invent a completion from missing text. A usage object that `parse_usage` already understands is attached. A body without one leaves usage unknown. Unknown usage is not stored as zero. This transport is not a spending cap.
 
 ## Single-task lifecycle (v0.4)
 
@@ -128,7 +143,7 @@ in v1.2 and uses a new task id.
 PR creation, Jira REST operations, provider APIs, agent crash recovery,
 live event streaming, token budgets and container sandboxing. Gates, draft
 PRs, Jira REST, durable retry, and estimated budgets were added in later
-milestones. Direct provider APIs are still absent.
+milestones. The CLI adapters remain the default. HTTP stays off unless `--transport http` is selected.
 Provider CLIs can execute code and incur charges; use trusted workspaces and
 provider permission settings.
 
