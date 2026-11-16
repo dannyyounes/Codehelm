@@ -456,8 +456,9 @@ human_approval_risks:
 
 Omitted keys use those defaults. `architecture_cmd` and `risk_patterns` are
 optional and empty when omitted. `schema_version` must be `1`. Unknown keys
-or an unknown schema version fail closed. `max_retries` is recorded policy
-only; the enforced attempt cap remains the scheduler's `DispatchBudget`.
+or an unknown schema version fail closed. `max_retries` is not a second retry
+loop; the enforced attempt cap remains the scheduler's `DispatchBudget`. An
+omitted `--max-attempts` uses `policy.max_retries` when the policy file exists.
 
 Evidence is taken from rows the orchestrator writes after it runs a check,
 and from `git`. An agent-written evidence JSON file is rejected.

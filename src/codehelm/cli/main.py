@@ -10,7 +10,7 @@ from codehelm.orchestrator.lifecycle import ClaimLost, LifecycleEngine, TaskStor
 from codehelm.integrations.github_pr import PullRequestError, github_user_login
 from codehelm.integrations.jira import JiraClient, JiraError
 from codehelm.orchestrator.scheduler import ready_stories, dispatch_batch
-from codehelm.orchestrator.durable import DurableScheduler, DispatchBudget
+from codehelm.orchestrator.durable import DurableScheduler, DispatchBudget, resolve_max_attempts
 from codehelm.orchestrator.budgets import BudgetLedger, Limits
 from codehelm.providers.usage import parse_usage
 from codehelm.orchestrator.monthly_budget import MonthlyBudget, MonthlyPolicy
@@ -265,7 +265,7 @@ def schedule_durable(
     prefix: str = typer.Option("PLAN"),
     provider: str = typer.Option("claude"),
     max_parallel: int = typer.Option(2, min=1, max=8),
-    max_attempts: int = typer.Option(2, min=1, max=5),
+    max_attempts: int | None = typer.Option(None, min=1, max=5),
     max_total_attempts: int = typer.Option(20, min=1, max=100),
     repo: Path = typer.Option(Path(".")),
     reserve_tokens: int = typer.Option(..., min=1, help="Estimated tokens per task"),
@@ -285,8 +285,9 @@ def schedule_durable(
     try:
         plan_obj = load_plan(plan_file)
         scheduler = DurableScheduler(STATE_DIR / "state.db", plan_obj, prefix)
-        budget = DispatchBudget(max_attempts, max_total_attempts, max_parallel)
         policy = load_policy(STATE_DIR / "quality.yaml")
+        budget = DispatchBudget(
+            resolve_max_attempts(policy, max_attempts), max_total_attempts, max_parallel)
         if not execute:
             typer.echo(f"Durable state: {scheduler.snapshot()}")
             typer.echo("Dry run. Add --execute to claim and launch one wave.")
@@ -401,7 +402,7 @@ def schedule_retry(
     story_id: str,
     plan_file: Path = typer.Option(Path(".codehelm/plan.json")),
     prefix: str = typer.Option("PLAN"),
-    max_attempts: int = typer.Option(2, min=1, max=5),
+    max_attempts: int | None = typer.Option(None, min=1, max=5),
     execute: bool = typer.Option(False),
 ) -> None:
     """Authorize a retry after manually inspecting a failed/interrupted attempt."""
@@ -409,8 +410,10 @@ def schedule_retry(
         typer.echo("Dry run. Add --execute to authorize a retry.")
         return
     try:
+        policy = load_policy(STATE_DIR / "quality.yaml")
         scheduler = DurableScheduler(STATE_DIR / "state.db", load_plan(plan_file), prefix)
-        scheduler.retry(story_id, DispatchBudget(max_attempts=max_attempts))
+        scheduler.retry(
+            story_id, DispatchBudget(max_attempts=resolve_max_attempts(policy, max_attempts)))
         typer.echo(f"{story_id}: pending retry")
     except (ValueError, PlanningError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)

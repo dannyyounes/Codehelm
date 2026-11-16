@@ -35,6 +35,14 @@ class DispatchBudget:
             raise ValueError("Invalid dispatch budget")
 
 
+def resolve_max_attempts(policy, requested: int | None) -> int:
+    if requested is not None:
+        return requested
+    if getattr(policy, "present", False):
+        return policy.max_retries
+    return 2
+
+
 class DurableScheduler:
     def __init__(self, database: Path, plan: Plan, prefix: str):
         self.store = TaskStore(database)
