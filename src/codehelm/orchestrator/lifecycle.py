@@ -197,6 +197,8 @@ class TaskStore:
             raise ValueError("Human approval requires a diff digest")
         if gate in {"acceptance", "oversized_justification", "risk"} and not detail:
             raise ValueError(f"{gate} requires detail text")
+        if gate == "oversized_justification" and not identity:
+            raise ValueError("Oversized justification requires an identity")
         if gate == "quality_debt" and (passed is not True or not detail or not identity):
             raise ValueError("Quality debt requires a passing finding and a reason")
         if gate in {"tests", "security", "architecture_check"} and passed and exit_code != 0:

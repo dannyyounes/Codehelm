@@ -490,7 +490,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` stores the GitHub login and a sha256 digest of the workspace diff | A later change makes that approval not count. It is not a cryptographic signature of the person. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
-| Oversized-change justification | Operator attestation | Not authenticated |
+| Oversized-change justification | `quality-justify` records the GitHub login and the reason | A dry run does not call GitHub. A row with no identity does not count. Later scoring does not call GitHub again |
 
 A test verifies one criterion only by emitting this line on stdout or stderr, or by creating or changing `.codehelm/acceptance-report.txt` in the workspace while it runs:
 

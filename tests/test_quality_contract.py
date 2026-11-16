@@ -338,7 +338,8 @@ def test_oversized_change_blocks_until_justification(tmp_path):
     assert "oversized_change_requires_justification" in latest["failures"]
     scheduler.store.record_evidence(
         task_id, "oversized_justification", "human", passed=True, attempt=1,
-        detail="Split was rejected; the migration is one mechanical rename.")
+        detail="Split was rejected; the migration is one mechanical rename.",
+        identity="dannyyounes")
     assert scheduler.apply_quality("S1") == "ready_for_pr"
 
 

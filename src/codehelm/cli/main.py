@@ -800,6 +800,40 @@ def quality_approve(
     typer.echo(f"Recorded approval by {login} for {task_id}. Re-evaluate before advancing.")
 
 
+@app.command("quality-justify")
+def quality_justify(
+    task_id: str,
+    reason: str = typer.Option(..., help="Why the oversized change is accepted"),
+    approver: str = typer.Option(..., help="Must exactly match the authenticated GitHub login"),
+    execute: bool = typer.Option(False, help="Record the justification as the authenticated GitHub user"),
+) -> None:
+    """Record an oversized-change justification as the GitHub login and the reason."""
+    if not execute:
+        typer.echo(
+            "Dry run. Add --execute to record the oversized-change justification "
+            "as the authenticated GitHub login.")
+        return
+    try:
+        stripped = (reason or "").strip()
+        if not stripped:
+            raise ValueError("Oversized justification requires a reason")
+        login = github_user_login()
+        if approver.strip() != login:
+            raise PullRequestError(
+                f"Approver {approver.strip()!r} does not match authenticated GitHub login {login!r}")
+        store = TaskStore(STATE_DIR / "state.db")
+        store.initialize()
+        store.record_evidence(
+            task_id, "oversized_justification", "human", passed=True,
+            attempt=task_attempt(task_id), detail=stripped, identity=login)
+    except (ValueError, OSError, PullRequestError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"Recorded oversized-change justification by {login} for {task_id}. "
+        "Re-evaluate before advancing.")
+
+
 @app.command("quality-debt")
 def quality_debt(
     task_id: str,
