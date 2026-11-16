@@ -9,7 +9,10 @@ operator attestation. Human approval records the GitHub login and a sha256
 digest of the workspace diff. A later change makes that approval not count.
 It is not a cryptographic signature of the person. A quality debt recorded by
 quality-debt accepts one unresolved finding for the current attempt and does
-not waive the other gates.
+not waive the other gates. A docs exception recorded by docs-exception stores
+the GitHub login and a nonempty reason. It satisfies documentation for this
+attempt and does not waive the other gates. The documentation agent cannot
+record that exception.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,7 +38,7 @@ _EVIDENCE_SOURCES = {
     "architecture_check": {"command_gate"},
     "review": {"independent_review"},
     "architecture": {"independent_review"},
-    "docs": {"documentation_agent"},
+    "docs": {"documentation_agent", "human"},
     "acceptance": {"human", "test_report"},
     "acceptance_planned": {"plan"},
     "human_approval": {"human"},
@@ -188,7 +191,9 @@ class TaskStore:
             raise ValueError(f"Untrusted evidence source: {gate}/{source}")
         if attempt < 1:
             raise ValueError("Attempt must be positive")
-        if gate in {"acceptance", "oversized_justification", "risk", "quality_debt", "human_approval"}:
+        if gate in {"acceptance", "oversized_justification", "risk", "quality_debt", "human_approval"} or (
+            gate == "docs" and source == "human"
+        ):
             detail = (detail or "").strip()
         identity = (identity or "").strip()
         if gate == "human_approval" and (not passed or not identity):
@@ -199,6 +204,8 @@ class TaskStore:
             raise ValueError(f"{gate} requires detail text")
         if gate == "quality_debt" and (passed is not True or not detail or not identity):
             raise ValueError("Quality debt requires a passing finding and a reason")
+        if gate == "docs" and source == "human" and (passed is not True or not detail or not identity):
+            raise ValueError("Documentation exception requires a passing nonempty reason and identity")
         if gate in {"tests", "security", "architecture_check"} and passed and exit_code != 0:
             raise ValueError(f"{gate} pass requires exit code 0")
         timestamp = now()
@@ -282,6 +289,15 @@ def _contract_stages(policy) -> list[tuple[str, str]]:
     return stages
 
 
+def _has_passing_human_docs(rows: list[EvidenceRow]) -> bool:
+    """True when this attempt already has a human docs exception."""
+    return any(
+        row.gate == "docs" and row.source == "human" and row.passed
+        and row.detail.strip() and row.identity.strip()
+        for row in rows
+    )
+
+
 def _stage_match(row: EvidenceRow, kind: str) -> bool:
     if kind == "command":
         return row.source == "command_gate"
@@ -290,7 +306,11 @@ def _stage_match(row: EvidenceRow, kind: str) -> bool:
     if kind == "architecture":
         return row.gate == "architecture" and row.source == "independent_review"
     if kind == "docs":
-        return row.source == "documentation_agent"
+        if row.source == "documentation_agent":
+            return True
+        return bool(
+            row.source == "human" and row.passed and row.detail.strip() and row.identity.strip()
+        )
     return False
 
 
@@ -442,6 +462,9 @@ class LifecycleEngine:
         if not workspace.is_dir():
             self.store.transition(task_id, "blocked", error="Workspace missing")
             return False
+        if _has_passing_human_docs(self.store.evidence_for(task_id, attempt)):
+            self.store.transition(task_id, "awaiting_post_docs_validation")
+            return True
         self.store.transition(task_id, "documenting")
         try:
             result = run_documentation_agent(workspace, provider, timeout)
@@ -525,7 +548,9 @@ class LifecycleEngine:
         """Run missing quality stages for one attempt, then score recorded evidence.
 
         Stages that already have a passing row for this attempt are not repeated.
-        A failing row fails closed and does not launch later model calls.
+        A passing human docs exception on this attempt satisfies documentation
+        without launching the documentation agent. A failing row fails closed
+        and does not launch later model calls.
         """
         policy = self._policy()
         if not policy.present:
@@ -555,6 +580,9 @@ class LifecycleEngine:
             self._beat(heartbeat)
             gate, kind = stages[pending]
             rows = self.store.evidence_for(task_id, attempt)
+            if kind == "docs" and _has_passing_human_docs(rows):
+                pending += 1
+                continue
             outcome = _next_stage_row(rows, cursor, gate, kind, implementer)
             if outcome == "fail":
                 return self._score_contract(
@@ -570,7 +598,11 @@ class LifecycleEngine:
                 test_command=test_command, security_command=security_command,
                 reviewer=reviewer, docs_provider=docs_provider or implementer,
                 timeout=timeout, docs_timeout=docs_timeout, implementer=implementer)
-            if len(self.store.evidence_for(task_id, attempt)) <= before:
+            recorded = self.store.evidence_for(task_id, attempt)
+            if len(recorded) <= before:
+                if kind == "docs" and _has_passing_human_docs(recorded):
+                    pending += 1
+                    continue
                 raise RuntimeError(f"Quality stage {gate} did not record evidence")
         self._beat(heartbeat)
         return self._score_contract(
@@ -605,6 +637,8 @@ class LifecycleEngine:
                 task_id, attempt, workspace, gate, command, timeout, f"validating_{label}")
             return
         if kind == "docs":
+            if _has_passing_human_docs(self.store.evidence_for(task_id, attempt)):
+                return
             self.store.transition(task_id, "documenting")
             try:
                 result = run_documentation_agent(workspace, docs_provider, docs_timeout)
