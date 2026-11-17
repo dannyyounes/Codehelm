@@ -504,7 +504,7 @@ class LifecycleEngine:
 
     def validate(self, task_id: str, test_command: list[str],
                  security_command: list[str], reviewer: str,
-                 timeout: int = 300, attempt: int | None = None) -> bool:
+                 timeout: int = 300, attempt: int | None = None, **story) -> bool:
         """Run required test, security, and independent review gates in order."""
         task = self.store.get(task_id)
         if task is None or task.status != "awaiting_validation" or not task.workspace:
@@ -522,7 +522,7 @@ class LifecycleEngine:
                 return False
         self.store.transition(task_id, "reviewing")
         try:
-            verdict = independent_review(workspace, task.provider or "", reviewer, timeout)
+            verdict = independent_review(workspace, task.provider or "", reviewer, timeout, **story)
         except Exception as exc:
             self.store.record_evidence(
                 task_id, "review", "independent_review", passed=False, attempt=attempt,
@@ -573,7 +573,7 @@ class LifecycleEngine:
 
     def validate_after_docs(self, task_id: str, test_command: list[str],
                             security_command: list[str], reviewer: str,
-                            timeout: int = 300, attempt: int | None = None) -> bool:
+                            timeout: int = 300, attempt: int | None = None, **story) -> bool:
         """Re-run gates after documentation; never mark complete or merge."""
         task = self.store.get(task_id)
         if task is None or task.status != "awaiting_post_docs_validation" or not task.workspace:
@@ -592,7 +592,7 @@ class LifecycleEngine:
                 return False
         self.store.transition(task_id, "post_docs_reviewing")
         try:
-            verdict = independent_review(workspace, task.provider or "", reviewer, timeout)
+            verdict = independent_review(workspace, task.provider or "", reviewer, timeout, **story)
         except Exception as exc:
             self.store.record_evidence(
                 task_id, "review", "independent_review", passed=False, attempt=attempt,
@@ -615,7 +615,8 @@ class LifecycleEngine:
             self.store.transition(task_id, "reviewing_architecture")
             try:
                 architecture = independent_review(
-                    workspace, task.provider or "", reviewer, timeout, kind="architecture")
+                    workspace, task.provider or "", reviewer, timeout,
+                    kind="architecture", **story)
             except Exception as exc:
                 self.store.record_evidence(
                     task_id, "architecture", "independent_review", passed=False, attempt=attempt,
@@ -637,7 +638,7 @@ class LifecycleEngine:
                            docs_timeout: int = 600,
                            heartbeat: Callable[[], bool] | None = None,
                            acceptance_criteria: list[str] | None = None,
-                           story_id: str | None = None):
+                           story_id: str | None = None, **story):
         """Run missing quality stages for one attempt, then score recorded evidence.
 
         Stages that already have a passing row for this attempt are not repeated.
@@ -690,7 +691,8 @@ class LifecycleEngine:
                 task_id, attempt, workspace, gate, kind, post=post,
                 test_command=test_command, security_command=security_command,
                 reviewer=reviewer, docs_provider=docs_provider or implementer,
-                timeout=timeout, docs_timeout=docs_timeout, implementer=implementer)
+                timeout=timeout, docs_timeout=docs_timeout, implementer=implementer,
+                acceptance_criteria=acceptance_criteria, **story)
             recorded = self.store.evidence_for(task_id, attempt)
             if len(recorded) <= before:
                 if kind == "docs" and _has_passing_human_docs(recorded):
@@ -719,7 +721,7 @@ class LifecycleEngine:
                                 gate: str, kind: str, *, post: bool,
                                 test_command: list[str], security_command: list[str],
                                 reviewer: str, docs_provider: str, timeout: int,
-                                docs_timeout: int, implementer: str) -> None:
+                                docs_timeout: int, implementer: str, **story) -> None:
         if kind == "command":
             label = f"post_docs_{gate}" if post else gate
             if gate == "architecture_check":
@@ -755,7 +757,7 @@ class LifecycleEngine:
         self.store.transition(task_id, status)
         try:
             verdict = independent_review(
-                workspace, implementer, reviewer, timeout, kind=review_kind)
+                workspace, implementer, reviewer, timeout, kind=review_kind, **story)
         except Exception as exc:
             self.store.record_evidence(
                 task_id, gate_name, "independent_review", passed=False, attempt=attempt,

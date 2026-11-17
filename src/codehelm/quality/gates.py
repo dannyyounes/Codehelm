@@ -133,9 +133,38 @@ _REVIEW_PROMPTS = {
                      "followed by no other text. Explain findings before that line."),
 }
 
+_STORY_CONTEXT_LIMIT = 12000
+_STORY_REVIEW_INSTRUCTION = (
+    "Judge the change against the story and acceptance criteria. "
+    "Report real defects: correctness, regressions, security issues within the declared scope, "
+    "and missing tests for the criteria. Do not request hardening for cases the story declares out of scope. "
+    "If remaining concerns are only out-of-scope or optional improvements, list them as notes and still return APPROVED."
+)
+
+
+def _review_prompt(kind: str, story_title: str | None, story_description: str | None,
+                   acceptance_criteria: list[str] | tuple[str, ...] | None,
+                   scope_text: str | None) -> str:
+    base = _REVIEW_PROMPTS[kind]
+    if (story_title is None and story_description is None
+            and acceptance_criteria is None and scope_text is None):
+        return base
+    criteria = "\n".join(f"- {item}" for item in (acceptance_criteria or ()))
+    lines = ["Story", story_title or "", story_description or "", "", "Acceptance criteria", criteria]
+    if scope_text is not None:
+        lines += ["", "Declared scope and threat model", scope_text]
+    context = "\n".join(lines)
+    if len(context) > _STORY_CONTEXT_LIMIT:
+        context = context[:_STORY_CONTEXT_LIMIT]
+    return f"{context}\n\n{_STORY_REVIEW_INSTRUCTION}\n\n{base}"
+
 
 def independent_review(workspace: Path, author: str, reviewer: str,
-                       timeout: int = 600, *, kind: str = "code") -> GateResult:
+                       timeout: int = 600, *, kind: str = "code",
+                       story_title: str | None = None,
+                       story_description: str | None = None,
+                       acceptance_criteria: list[str] | tuple[str, ...] | None = None,
+                       scope_text: str | None = None) -> GateResult:
     """Model verdict plus a Git snapshot guard. This is not human approval."""
     if kind not in _REVIEW_PROMPTS:
         return GateResult(False, f"Unknown review kind: {kind}")
@@ -144,7 +173,8 @@ def independent_review(workspace: Path, author: str, reviewer: str,
     before = git_snapshot(workspace)
     if not before.strip():
         return GateResult(False, "No changes to review")
-    result = CLIProvider(reviewer).execute(_REVIEW_PROMPTS[kind], workspace, timeout)
+    prompt = _review_prompt(kind, story_title, story_description, acceptance_criteria, scope_text)
+    result = CLIProvider(reviewer).execute(prompt, workspace, timeout)
     after = git_snapshot(workspace)
     if after != before:
         return GateResult(False, "Reviewer modified the workspace; review invalid", result.exit_code)

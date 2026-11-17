@@ -433,7 +433,8 @@ class DurableScheduler:
             task_id, list(test_command or []), list(security_command or []), reviewer,
             docs_provider or provider, timeout=timeout, docs_timeout=agent_timeout,
             heartbeat=heartbeat, acceptance_criteria=list(story.acceptance_criteria),
-            story_id=story.id)
+            story_id=story.id, story_title=story.title,
+            story_description=story.description)
         self.settle(story_id, decision.status, decision_error(decision))
         return decision.status
 
