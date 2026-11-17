@@ -42,6 +42,19 @@ def parse_usage(provider: str, output: str) -> Usage | None:
             return None
         inp, out = usage.get("input_tokens"), usage.get("output_tokens")
         cost = payload.get("total_cost_usd")
+    elif provider == "cursor":
+        # cursor-agent --output-format json reports camelCase token counts and
+        # no USD cost; cost stays unknown rather than inferred.
+        usage = payload.get("usage")
+        if payload.get("type") != "result" or not isinstance(usage, dict):
+            return None
+        inp, out = usage.get("inputTokens"), usage.get("outputTokens")
+        # Cache reads/writes are reported apart from inputTokens; count them too.
+        cached = [usage.get(key, 0) for key in ("cacheReadTokens", "cacheWriteTokens")]
+        if type(inp) is not int or inp < 0 or any(type(c) is not int or c < 0 for c in cached):
+            return None
+        inp += sum(cached)
+        cost = None
     else:
         return None
     if type(inp) is not int or type(out) is not int or inp < 0 or out < 0:

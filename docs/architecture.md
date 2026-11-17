@@ -8,7 +8,7 @@ The package version is `0.1.0`. The behavior below is what the code does now.
 
 - **Planning:** a provider-neutral adapter returns a structured Epic and Stories. The plan is validated locally (IDs, dependencies, cycles) before anything is dispatched.
 - **Deterministic engine:** task transitions, the dependency-aware scheduler, attempt and concurrency limits, budget admission, and the quality contract.
-- **Adapters:** Claude Code, Codex, and Gemini CLIs behind one provider interface. The default transport is the CLI. An opt-in HTTP transport for the same three names is off unless `transport="http"`. It has no default host, model, or token, does not fall back to the CLI, and is not a spending cap.
+- **Adapters:** Claude Code, Codex, Gemini, and Cursor Agent (`cursor`, model from `CODEHELM_CURSOR_MODEL`, default `auto`) CLIs behind one provider interface. The default transport is the CLI. An opt-in HTTP transport for `claude`, `codex`, and `gemini` only is off unless `transport="http"`. It has no default host, model, or token, does not fall back to the CLI, and is not a spending cap.
 - **State:** SQLite in `.codehelm/state.db`. Task rows, dispatch claims, budget reservations, and quality evidence live outside the model context.
 - **Execution:** one Git worktree per coding task. Worktrees are file isolation, not a container sandbox.
 - **DesignFlow:** a screen or form spec is rendered to an HTML mockup. Inline comments are stored locally. `designflow revise --execute` sends the queued comments to a provider and renders the next revision only from JSON that validates. The review server binds to `127.0.0.1` and does not launch a provider. Ported from firstmate's lavish.
