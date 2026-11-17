@@ -27,6 +27,14 @@ codehelm pr-create --help
 ```
 Documentation-agent story context, documentation-path checks, and an already-included documentation diff are covered by `tests/test_documentation.py`. Verify with `pytest tests/test_documentation.py`.
 
+Namespace gate stage directories are covered by `tests/test_gate_sandbox.py`. Each bind is a new directory under `/dev/shm` (`codehelm-ws-` for the workspace; `codehelm-keep0-`, `codehelm-keep1-`, and so on for an interpreter directory that would be covered). The name does not include the process id. `unshare --pid --fork` runs the sandbox as pid 1, so concurrent namespace gates do not share a stage path. CodeHelm unmounts and removes the directories before the gate command replaces the process. If that unmount fails, the directory can remain under `/dev/shm`. The container runner does not create them. Verify with:
+
+```bash
+pytest tests/test_gate_sandbox.py::test_stage_directories_are_unique_for_the_same_name_and_pid
+```
+
+The test sets `os.getpid` to 1, calls `_stage("ws")` twice, and requires two different directories whose parent is `/dev/shm`. It then removes them. It does not run `unshare`. `/dev/shm` must be writable.
+
 ## Repository hygiene
 
 The root `.gitignore` keeps Python bytecode, pytest and packaging caches, virtualenvs, and local CodeHelm artifacts (`.codehelm/state.db*`, `.codehelm/plan.json`, `.codehelm/config.yaml`, `.codehelm/tmp/`) out of git. Do not force-add `__pycache__/` or `*.pyc` files.
