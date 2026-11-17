@@ -113,6 +113,7 @@ def validate(
     test_cmd: str = typer.Option(..., help="Executable for tests, e.g. pytest"),
     security_cmd: str = typer.Option(..., help="Executable for security scan, e.g. bandit"),
     repo: Path = typer.Option(Path("."), help="Original Git repository"),
+    timeout: int = typer.Option(300, min=1, max=7200, help="Gate and review timeout in seconds"),
     execute: bool = typer.Option(False, help="Explicitly permit checks and review agent"),
 ) -> None:
     """Run configured test, security and independent review gates."""
@@ -121,7 +122,7 @@ def validate(
         return
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        passed = engine.validate(task_id, [test_cmd], [security_cmd], reviewer)
+        passed = engine.validate(task_id, [test_cmd], [security_cmd], reviewer, timeout)
     except (ValueError, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -136,6 +137,7 @@ def document(
     task_id: str,
     provider: str = typer.Option(..., help="Documentation agent CLI provider"),
     repo: Path = typer.Option(Path("."), help="Original Git repository"),
+    timeout: int = typer.Option(600, min=1, max=7200, help="Documentation agent timeout in seconds"),
     execute: bool = typer.Option(False, help="Explicitly permit documentation agent execution"),
 ) -> None:
     """Update task documentation after successful independent code review."""
@@ -144,7 +146,7 @@ def document(
         return
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        passed = engine.document(task_id, provider)
+        passed = engine.document(task_id, provider, timeout)
     except (ValueError, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -161,6 +163,7 @@ def validate_after_docs(
     test_cmd: str = typer.Option(..., help="Executable for tests"),
     security_cmd: str = typer.Option(..., help="Executable for security scan"),
     repo: Path = typer.Option(Path("."), help="Original Git repository"),
+    timeout: int = typer.Option(300, min=1, max=7200, help="Gate and review timeout in seconds"),
     execute: bool = typer.Option(False, help="Explicitly permit checks and review agent"),
 ) -> None:
     """Re-run tests, security and independent review after documentation."""
@@ -169,7 +172,8 @@ def validate_after_docs(
         return
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        passed = engine.validate_after_docs(task_id, [test_cmd], [security_cmd], reviewer)
+        passed = engine.validate_after_docs(
+            task_id, [test_cmd], [security_cmd], reviewer, timeout)
     except (ValueError, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -437,6 +441,10 @@ def schedule_durable(
     reviewer: str = typer.Option("", help="Independent reviewer used when a quality policy exists"),
     test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
     security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
+    agent_timeout: int = typer.Option(
+        600, min=1, max=7200, help="Coding and documentation agent timeout in seconds"),
+    gate_timeout: int = typer.Option(
+        300, min=1, max=7200, help="Gate and review timeout in seconds"),
     execute: bool = typer.Option(False),
 ) -> None:
     """Claim one ready wave. A quality policy continues that claim through the gates."""
@@ -533,6 +541,7 @@ def schedule_durable(
                     test_command=[test_cmd], security_command=[security_cmd],
                     reviewer=reviewer, docs_provider=provider,
                     heartbeat=lambda: scheduler.heartbeat(sid),
+                    timeout=gate_timeout, agent_timeout=agent_timeout,
                     transport=transport.value)
                 return sid, status
             except ClaimLost:
@@ -642,6 +651,10 @@ def resume(
     test_cmd: str = typer.Option("pytest", help="Test executable used when a quality policy exists"),
     security_cmd: str = typer.Option("bandit", help="Security executable used when a quality policy exists"),
     repo: Path = typer.Option(Path("."), help="Git repository"),
+    agent_timeout: int = typer.Option(
+        600, min=1, max=7200, help="Coding and documentation agent timeout in seconds"),
+    gate_timeout: int = typer.Option(
+        300, min=1, max=7200, help="Gate and review timeout in seconds"),
     execute: bool = typer.Option(False, help="Re-claim the interrupted story and carry the same attempt"),
 ) -> None:
     """Continue one interrupted story on the same attempt. Does not relaunch a coding agent."""
@@ -682,7 +695,8 @@ def resume(
             story_id, engine, prompt=prompt, provider=provider,
             test_command=[test_cmd], security_command=[security_cmd],
             reviewer=reviewer, docs_provider=provider,
-            heartbeat=lambda: scheduler.heartbeat(story_id))
+            heartbeat=lambda: scheduler.heartbeat(story_id),
+            timeout=gate_timeout, agent_timeout=agent_timeout)
         typer.echo(f"{story_id}: {status}")
     except (ValueError, PlanningError, ClaimLost, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)

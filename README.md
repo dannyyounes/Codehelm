@@ -57,7 +57,7 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 
 `codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, the v1.7 quality commands, and `designflow`.
 
-`codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues an interrupted durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it names the task and does not change dispatch state. With `--execute` it re-claims that interrupted story and carries the same attempt forward. It refuses to relaunch a queued, running, or failed coding agent. `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
+`codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues an interrupted durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it names the task and does not change dispatch state. With `--execute` it re-claims that interrupted story and carries the same attempt forward. It refuses to relaunch a queued, running, or failed coding agent. `resume` accepts the same `--agent-timeout` and `--gate-timeout` bounds as `schedule-durable` (see Durable scheduling). `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
 
 ## Design principles
 
@@ -87,6 +87,19 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [Agent Instructions](AGENTS.md).
 
 `.gitignore` excludes bytecode, caches, virtualenvs, and local `.codehelm/` artifacts. `pytest tests/test_repo_hygiene.py` fails if any `*.pyc` file is tracked in git.
+
+Lifecycle timeout defaults and CLI wiring are covered by `tests/test_lifecycle_timeouts.py`. Verify with:
+
+```bash
+pytest tests/test_lifecycle_timeouts.py
+codehelm validate --help
+codehelm document --help
+codehelm validate-after-docs --help
+codehelm schedule-durable --help
+codehelm resume --help
+```
+
+Help text lists `--timeout` / `--agent-timeout` / `--gate-timeout` with their documented defaults (300 or 600) and the 1..7200 bound.
 
 ## DesignFlow
 
@@ -181,7 +194,10 @@ Run explicit test and security executables, followed by an independent CLI revie
 
 ```bash
 codehelm validate DEV-123 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
+codehelm validate DEV-123 --reviewer codex --test-cmd pytest --security-cmd bandit --timeout 900 --execute
 ```
+
+`--timeout` (default 300, range 1..7200) is the per-command limit for the test executable, security executable, and independent reviewer. It applies only with `--execute`. Out-of-range values are rejected by the CLI.
 
 **Important:** `--test-cmd` and `--security-cmd` each accept an executable name only
 (no arguments). Install/configure those commands in the agent worktree environment
@@ -213,9 +229,11 @@ After a task passes test, security and independent code review gates:
 
 ```bash
 codehelm document DEV-123 --provider claude --execute
+codehelm document DEV-123 --provider claude --timeout 1800 --execute
 codehelm task-status DEV-123
 ```
 
+`--timeout` (default 600, range 1..7200) is the documentation agent process limit. It applies only with `--execute`. Out-of-range values are rejected by the CLI.
 The documentation agent examines implementation and tests, updates relevant
 README/docs/API/user/developer documentation, and must produce an actual
 documentation-file change. It is not permitted to change non-documentation
@@ -240,8 +258,10 @@ independent-review gates again:
 
 ```bash
 codehelm validate-after-docs DEV-123 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
+codehelm validate-after-docs DEV-123 --reviewer codex --test-cmd pytest --security-cmd bandit --timeout 900 --execute
 ```
 
+`--timeout` (default 300, range 1..7200) is the per-command limit for the post-documentation test, security, and independent-review steps. It applies only with `--execute`. Out-of-range values are rejected by the CLI.
 Successful gates transition to `awaiting_pr`, **not** `completed`, when no
 quality policy file is present. A failure blocks the task or requests changes.
 CLI commands currently accept executable names without arguments. GitHub PR
@@ -378,11 +398,14 @@ were added in v1.2–v1.4; this legacy `schedule` path does not use them.
 ```bash
 codehelm schedule-durable --plan-file .codehelm/plan.json --prefix PLAN
 codehelm schedule-durable --plan-file .codehelm/plan.json --prefix PLAN --max-parallel 2 --max-attempts 2 --max-total-attempts 20 --execute
+codehelm schedule-durable --plan-file .codehelm/plan.json --prefix PLAN --reserve-tokens 100 --reserve-usd 0.50 --limit-tokens 1000 --limit-usd 10 --agent-timeout 1500 --gate-timeout 450 --execute
+codehelm resume PLAN-S1-A1 --prefix PLAN --plan-file .codehelm/plan.json --agent-timeout 2100 --gate-timeout 700 --execute
 codehelm schedule-recover --plan-file .codehelm/plan.json --prefix PLAN
 codehelm schedule-retry S1 --plan-file .codehelm/plan.json --prefix PLAN --execute
 codehelm schedule-complete S1 --plan-file .codehelm/plan.json --prefix PLAN --confirmed-merged --execute
 ```
 
+`schedule-durable` and `resume` accept `--agent-timeout` (default 600, range 1..7200) and `--gate-timeout` (default 300, range 1..7200). `--agent-timeout` bounds the coding agent and, when a quality policy continues the claim, the documentation agent. `--gate-timeout` bounds test/security commands and model reviews on that same path. `resume` still does not relaunch a queued, running, or failed coding agent; `--agent-timeout` then applies only if that attempt still runs the documentation agent. Dry runs do not start agents or gates. Out-of-range values are rejected by the CLI. `codehelm run` and `codehelm agent-run` keep their own `--timeout` (default 600, max 3600) and are unchanged by these flags.
 SQLite records story dispatch states and attempts. Atomic claims prevent
 multiple scheduler processes from claiming the same story. Limits cap
 concurrent claims, per-story attempts, and total attempts. Each retry uses a
