@@ -539,6 +539,14 @@ class LifecycleEngine:
         return True
 
 
+    def _documentation_agent(self, workspace: Path, provider: str, timeout: int, *,
+                             story_title: str = "", story_description: str = "",
+                             acceptance_criteria: list[str] | tuple[str, ...] | None = None):
+        return run_documentation_agent(
+            workspace, provider, timeout, story_title=story_title,
+            story_description=story_description, acceptance_criteria=acceptance_criteria,
+            policy_path=policy_path_for(self.store.database))
+
     def document(self, task_id: str, provider: str, timeout: int = 600,
                  attempt: int | None = None) -> bool:
         """Run documentation specialist only after quality gates pass."""
@@ -555,7 +563,7 @@ class LifecycleEngine:
             return True
         self.store.transition(task_id, "documenting")
         try:
-            result = run_documentation_agent(workspace, provider, timeout)
+            result = self._documentation_agent(workspace, provider, timeout)
         except Exception as exc:
             self.store.record_evidence(
                 task_id, "docs", "documentation_agent", passed=False, attempt=attempt,
@@ -738,7 +746,11 @@ class LifecycleEngine:
                 return
             self.store.transition(task_id, "documenting")
             try:
-                result = run_documentation_agent(workspace, docs_provider, docs_timeout)
+                result = self._documentation_agent(
+                    workspace, docs_provider, docs_timeout,
+                    story_title=story.get("story_title") or "",
+                    story_description=story.get("story_description") or "",
+                    acceptance_criteria=story.get("acceptance_criteria"))
             except Exception as exc:
                 self.store.record_evidence(
                     task_id, "docs", "documentation_agent", passed=False, attempt=attempt,

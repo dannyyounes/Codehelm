@@ -284,22 +284,80 @@ codehelm task-status DEV-123
 ```
 
 `--timeout` (default 600, range 1..7200) is the documentation agent process limit. It applies only with `--execute`. Out-of-range values are rejected by the CLI.
-The documentation agent examines implementation and tests, updates relevant
-README/docs/API/user/developer documentation, and must produce an actual
-documentation-file change. It is not permitted to change non-documentation
-files. Failure blocks the task; success advances it to
-`awaiting_post_docs_validation`. It **does not** mark the story complete.
-A second validation pass, draft PRs, and Jira comments were added in v0.7–v0.9.
+The documentation agent examines implementation and tests and updates relevant
+README, `docs/`, API, user, or developer documentation. Paths it may change are
+`README.md`, anything under `docs/`, paths ending in `.md` or `.rst`, and paths
+starting with `CHANGELOG`. Any other edit fails with
+`Documentation agent modified non-documentation files`, including when a
+documentation path is already in the diff.
 
-Limitations: the checks use working-tree file hashes and do not catch every
-possible side effect (such as modifications to ignored files or Git history).
-The coding CLI runs with its normal local permissions; use a sandbox for
-untrusted code. Documentation that needs no change is a human exception:
+`codehelm document` sends the base prompt only. `schedule-durable` and `resume`
+append the claimed story's title, description, and acceptance criteria when
+they run this agent (`require_docs` defaults to true). That text tells the
+agent to respect any documentation scope or line limits stated there and to
+make no edit when documentation is already complete. Those limits are prompt
+text. Whitespace-only title, description, and criteria add nothing.
+
+A zero exit is checked with content hashes of the union of paths from
+`git status --porcelain -uall` before and after the agent. A path that was
+dirty before and is clean or missing afterward counts as an agent edit. A
+documentation-only edit passes. Its evidence detail is the agent stdout, last
+2000 characters, or `Documentation changes detected` when stdout is empty. When
+the agent edits nothing, the gate passes with detail `Documentation already
+included in the change` if `collect_diff` already lists a documentation path.
+That diff is committed changes from the merge-base with the resolved base
+through `HEAD`, plus uncommitted and untracked paths. The base comes from
+`resolve_diff_base` and `base_branch` in `.codehelm/quality.yaml` beside the
+state database. A missing file or an omitted key leaves the name empty, so
+only the main/master fallbacks are tried. A named ref that is not present
+falls through to those fallbacks. Lookups use only `refs/heads/<name>` and
+`refs/remotes/origin/<name>`. When no documentation path is in that diff, the
+detail is `No documentation changes detected`. A nonzero agent exit fails
+with `Documentation agent failed:` plus the provider stderr, last 1500
+characters, and does not consult that diff.
+
+Failure on this command sets `blocked`. For an agent result, the printed
+task error is the evidence detail. Success sets
+`awaiting_post_docs_validation`. It does not mark the story complete. On the
+no-edit check, an invalid policy or a diff that cannot be computed
+(`Could not compute the documentation diff against the resolved base`) is
+stored on the docs evidence row and the task becomes `blocked`. The printed
+task error is `documentation:` plus that exception. A second
+validation pass, draft PRs, and Jira comments were added in v0.7–v0.9.
+
+Limitations: the edit check reads paths from `git status --porcelain -uall`
+and compares file hashes. A non-documentation path that was dirty before the
+agent and is clean or missing afterward counts as an edit and fails the gate.
+Ignored files are not listed. A commit that is clean in both snapshots is not
+an agent edit; with no porcelain edit, a documentation path already in the
+resolved-base diff still passes. The documentation CLI runs with its normal
+local permissions; use a sandbox for untrusted code. A change with no
+documentation path still needs a human exception:
 `codehelm docs-exception TASK --reason TEXT --approver LOGIN`. With
 `--execute`, CodeHelm records it only when `--approver` strips to the
 GitHub login from `github_user_login()` and the reason is nonempty. A dry
 run does not call GitHub and writes nothing. The exception does not waive
 tests, security, review, acceptance, or human approval.
+
+Verify with `pytest tests/test_documentation.py`. After a task is
+`awaiting_documentation`:
+
+```bash
+codehelm document DEV-123 --provider claude --execute
+codehelm task-status DEV-123
+sqlite3 .codehelm/state.db "SELECT passed, detail FROM quality_evidence WHERE task_id='DEV-123' AND gate='docs' ORDER BY id DESC LIMIT 1;"
+```
+
+`document` prints `DEV-123: awaiting_post_docs_validation; ` when the gate
+passes. The evidence detail is `Documentation already included in the change`
+when the agent exited 0, edited nothing, and the resolved-base diff already
+has a documentation path. A miss prints `DEV-123: blocked; No documentation
+changes detected`. A source edit, including restoring a dirty source file to
+`HEAD`, prints `DEV-123: blocked; Documentation agent modified non-documentation
+files`. An invalid `.codehelm/quality.yaml` on that no-edit path prints
+`blocked` and a task error of `documentation:` plus the policy error. The
+evidence `detail` is that policy error without the prefix. `task-status`
+prints the status and does not print the evidence detail.
 
 ## Post-documentation validation (v0.7)
 
@@ -534,6 +592,11 @@ When `.codehelm/quality.yaml` exists, that same claim continues through the
 test, security, review, documentation, and post-documentation gates before
 the dispatch row is released. The story then becomes `blocked`,
 `awaiting_human_approval`, or `ready_for_pr` from the recorded evidence.
+When that claim runs the documentation agent and the story has a non-blank
+title, description, or acceptance criterion, the prompt includes those fields.
+An invalid policy fails `schedule-durable` and `resume` before the agent
+starts. If the no-edit diff check raises during that docs stage, the exception
+is stored on the docs evidence row and scoring adds `documentation_not_verified`.
 A passing test exit code does not attest acceptance criteria. The test
 process can verify a criterion by printing a `CODEHELM_ACCEPTANCE` line, or
 by writing that line to `.codehelm/acceptance-report.txt` during the run. A
@@ -769,7 +832,8 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Tests and security | Exit code from `command_gate` | A real process result |
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged). A matching story is prepended to that prompt; see Quality gates for the task-id shape and the 12000-character cut | A model verdict recorded by CodeHelm, not human approval |
-| Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
+| Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
+| Documentation | Documentation-agent file check, an already-included documentation diff, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A workspace check on this attempt. No new edit still passes when the resolved-base diff already includes a documentation path, with detail `Documentation already included in the change`. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `resolve_diff_base` then `collect_diff` (`merge-base..<HEAD` numstat plus working-tree/untracked), policy globs, and `risk_patterns` | Repository state. Optional `base_branch` is preferred before the main/master fallbacks; lookups use only `refs/heads/<name>` and `refs/remotes/origin/<name>` (order: policy base, `origin/<base>`, `main`, `master`, `origin/main`, `origin/master`). When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` stores the GitHub login and `diff_digest` for policy `base_branch` (cached binary diff of a temporary index after `git add -A` against the merge-base; `git diff HEAD` plus untracked file bytes when no base resolves) | Committing that same content leaves the approval in place only when a base resolved. A content edit makes that approval not count (`approval_diff_mismatch`, status `blocked`). A commit with no resolved base also changes the digest. An empty digest is not recorded. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. Later scoring does not call GitHub again |
@@ -872,8 +936,12 @@ The signed bytes are the `sha256:` digest with no added newline. SSH uses `ssh-k
 `docs-exception --execute` records a passing docs row for the current attempt
 when `--approver` strips to the GitHub login and `--reason` is nonempty. A
 dry run does not call GitHub. The exception does not waive tests, security,
-review, acceptance, or human approval. The documentation agent still fails
-when it changes no documentation file.
+review, acceptance, or human approval. The documentation agent fails
+with `No documentation changes detected` when neither the resolved-base diff
+nor the agent touched a documentation file. A nonzero agent exit fails with
+`Documentation agent failed:` and leaves that diff unused. It passes with
+detail `Documentation already included in the change` when the agent exits 0,
+makes no new edit, and the resolved-base change already includes one.
 
 Test and security commands run through `unshare` with a private user, mount,
 pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The
