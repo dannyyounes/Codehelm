@@ -86,6 +86,8 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 
 See [Architecture](docs/architecture.md), [Contributing](CONTRIBUTING.md), and [Agent Instructions](AGENTS.md).
 
+`.gitignore` excludes bytecode, caches, virtualenvs, and local `.codehelm/` artifacts. `pytest tests/test_repo_hygiene.py` fails if any `*.pyc` file is tracked in git.
+
 ## DesignFlow
 
 DesignFlow writes a visual mockup of a screen or form, stores inline comments on that mockup, and sends those comments to an agent for a revised mockup. Ported from firstmate's lavish.
