@@ -211,20 +211,28 @@ def pr_create(
         help="Target branch; defaults to quality policy base_branch when set, otherwise main",
     ),
     repo: Path = typer.Option(Path("."), help="Original Git repository"),
-    execute: bool = typer.Option(False, help="Explicitly push branch and create draft PR"),
+    execute: bool = typer.Option(False, help="Explicitly push branch and create the pull request"),
+    ready: bool = typer.Option(False, "--ready", help="Create a ready pull request instead of a draft"),
+    draft: bool = typer.Option(
+        False, "--draft", help="Force a draft pull request even when pr_ready or --ready is set"),
 ) -> None:
-    """Create a draft GitHub PR after all implemented gates pass."""
-    if not execute:
-        typer.echo("Dry run. Add --execute to push branch and create a draft PR.")
-        return
+    """Create a GitHub PR after all implemented gates pass. Draft unless --ready or pr_ready."""
     try:
-        target = base if base is not None else default_pr_base(load_policy(STATE_DIR / "quality.yaml"))
+        policy = load_policy(STATE_DIR / "quality.yaml")
+        # --draft wins over --ready and over pr_ready. Absent or false stays a draft.
+        as_draft = draft or not (ready or policy.pr_ready)
+        if not execute:
+            kind = "draft PR" if as_draft else "ready PR"
+            typer.echo(f"Dry run. Add --execute to push branch and create a {kind}.")
+            return
+        target = base if base is not None else default_pr_base(policy)
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        url = engine.create_pull_request(task_id, title, body, target)
+        url = engine.create_pull_request(task_id, title, body, target, draft=as_draft)
     except (ValueError, WorktreeError, PullRequestError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(f"Draft pull request created: {url}")
+    label = "Draft pull request" if as_draft else "Pull request"
+    typer.echo(f"{label} created: {url}")
 
 
 @app.command("aud-quote")

@@ -19,6 +19,13 @@ pytest tests/test_quality.py::test_review_prompt_unchanged_without_story_context
 
 Diff-bound human approval is covered by `tests/test_diff_bound_approval.py`: the digest stays stable when the same content is committed against a resolved merge-base, a content edit or a commit with no resolved base invalidates it, and a dirty submodule, an untracked nested repository, or a missing merge-base yields an empty digest that `quality-approve` will not record. Verify with `pytest tests/test_diff_bound_approval.py`.
 
+Ready versus draft pull requests are covered by `tests/test_github_pr.py`. `pr-create` reads `.codehelm/quality.yaml` from the current working directory. The pull request stays a draft unless `--ready` is passed or `pr_ready` is boolean `true`. `--draft` wins over both. A missing file, an omitted key, null, and `false` stay draft. A non-boolean fails policy load with `pr_ready must be a boolean`. A dry run prints `create a draft PR.` or `create a ready PR.` and does not push. `--execute` passes that choice as `draft` to `publish_pr`. `publish_pr` defaults `draft=True`, adds `gh pr create --draft` only when the flag is true, and does not merge. `LifecycleEngine.create_pull_request` also defaults `draft=True` and does not read `pr_ready`. Verify with:
+
+```bash
+pytest tests/test_github_pr.py
+codehelm pr-create --help
+```
+
 ## Repository hygiene
 
 The root `.gitignore` keeps Python bytecode, pytest and packaging caches, virtualenvs, and local CodeHelm artifacts (`.codehelm/state.db*`, `.codehelm/plan.json`, `.codehelm/config.yaml`, `.codehelm/tmp/`) out of git. Do not force-add `__pycache__/` or `*.pyc` files.

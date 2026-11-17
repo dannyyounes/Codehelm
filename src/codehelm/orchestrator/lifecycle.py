@@ -769,8 +769,8 @@ class LifecycleEngine:
                           identity=reviewer)
 
     def create_pull_request(self, task_id: str, title: str, body: str,
-                            base: str = "main") -> str:
-        """Publish draft PR only after post-documentation gates pass."""
+                            base: str = "main", draft: bool = True) -> str:
+        """Publish a pull request only after post-documentation gates pass. Never merges."""
         task = self.store.get(task_id)
         policy = self._policy()
         required = "ready_for_pr" if policy.present else "awaiting_pr"
@@ -783,7 +783,7 @@ class LifecycleEngine:
                 raise ValueError(f"Quality contract status is {decision.status}")
         branch = self.worktrees._identity(task_id).branch
         try:
-            pr = publish_pr(Path(task.workspace), branch, title, body, base=base)
+            pr = publish_pr(Path(task.workspace), branch, title, body, base=base, draft=draft)
         except Exception as exc:
             # Keep the status pr-create will accept on retry. A policy-gated task
             # must stay ready_for_pr; awaiting_pr would make the next attempt fail closed.
