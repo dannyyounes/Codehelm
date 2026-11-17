@@ -85,6 +85,7 @@ _POLICY_FIELDS = {
     "auto_merge",
     "jira_transitions",
     "jira_transition_execute",
+    "base_branch",
 }
 _JIRA_TRANSITION_STATES = frozenset({
     "awaiting_validation", "failed", "blocked",
@@ -167,6 +168,7 @@ class QualityPolicy:
     auto_merge: bool = False
     jira_transitions: tuple[tuple[str, str], ...] = ()
     jira_transition_execute: bool = False
+    base_branch: str = ""
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -474,7 +476,46 @@ def load_policy(path: Path) -> QualityPolicy:
         auto_merge=auto_merge,
         jira_transitions=jira_transitions,
         jira_transition_execute=jira_transition_execute,
+        base_branch=_load_base_branch(data),
     )
+
+
+def _load_base_branch(data: dict) -> str:
+    """Optional integration branch for diff counting and pr-create defaulting.
+
+    An absent key keeps main/master fallbacks. An explicit null or empty value
+    fails closed. A present value must pass ``git check-ref-format refs/heads/<name>``
+    (not ``--branch``, which expands checkout shorthands). Names equal to
+    ``HEAD`` or ``@``, or containing ``@{``, are refused even when check-ref-format
+    would accept them.
+    """
+    if "base_branch" not in data:
+        return ""
+    value = data["base_branch"]
+    if value is None:
+        raise ValueError("base_branch must be a nonempty string")
+    if type(value) is not str:
+        raise ValueError("base_branch must be a string")
+    value = value.strip()
+    if not value or "\x00" in value:
+        raise ValueError("base_branch must be a nonempty string")
+    # refs/heads/<name> accepts some names --branch would refuse (leading '-',
+    # HEAD). Reject those literals here; do not use --branch (expands @{-1}).
+    if value in {"HEAD", "@"} or value.startswith("-") or "@{" in value:
+        raise ValueError("base_branch must be a valid branch name")
+    check = subprocess.run(
+        ["git", "check-ref-format", f"refs/heads/{value}"],
+        capture_output=True, text=True)
+    if check.returncode != 0:
+        raise ValueError("base_branch must be a valid branch name")
+    return value
+
+
+def default_pr_base(policy: QualityPolicy) -> str:
+    """Target branch for pr-create when --base is omitted."""
+    if policy.present and policy.base_branch:
+        return policy.base_branch
+    return "main"
 
 
 def _load_jira_transitions(data: dict) -> tuple[tuple[str, str], ...]:
@@ -521,28 +562,64 @@ def _add_numstat(files: dict[str, int], text: str) -> None:
         files[path] = files.get(path, 0) + count
 
 
-def collect_diff(workspace: Path | None) -> tuple[list[str], int]:
-    """Changed files and line counts from git. Missing git data fails closed (-1)."""
+def resolve_diff_base(workspace: Path, base_branch: str = "") -> str | None:
+    """First existing ref for change counting.
+
+    Order: policy base_branch, origin/<base_branch>, main, master, origin/main,
+    origin/master. Lookups use refs/heads/<name> and refs/remotes/origin/<name>
+    so a tag with the same name cannot win. An empty base_branch skips the
+    policy entries.
+    """
+    candidates: list[str] = []
+    name = (base_branch or "").strip()
+    if name:
+        candidates.append(f"refs/heads/{name}")
+        candidates.append(f"refs/remotes/origin/{name}")
+    candidates.extend([
+        "refs/heads/main",
+        "refs/heads/master",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+    ])
+    seen: set[str] = set()
+    for ref in candidates:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        if _git(workspace, "rev-parse", "--verify", "--quiet", ref).returncode:
+            continue
+        return ref
+    return None
+
+
+def collect_diff(workspace: Path | None, base_branch: str = "") -> tuple[list[str], int]:
+    """Changed files and line counts from git. Missing git data fails closed (-1).
+
+    Committed changes are ``merge-base(base, HEAD)..HEAD``. Working-tree and
+    untracked paths are added on top. ``base_branch`` selects the policy base;
+    resolution follows ``resolve_diff_base``.
+    """
     if workspace is None or not workspace.is_dir():
         return [], -1
     head = _git(workspace, "rev-parse", "--abbrev-ref", "HEAD")
     if head.returncode:
         return [], -1
     files: dict[str, int] = {}
-    branch = head.stdout.strip()
-    if branch not in {"main", "master", "HEAD"}:
-        for ref in ("main", "master"):
-            if _git(workspace, "rev-parse", "--verify", "--quiet", ref).returncode:
-                continue
-            if _git(workspace, "merge-base", "--is-ancestor", ref, "HEAD").returncode:
-                continue
-            if _git(workspace, "rev-parse", ref).stdout.strip() == _git(workspace, "rev-parse", "HEAD").stdout.strip():
-                break
-            committed = _git(workspace, "diff", "--numstat", f"{ref}...HEAD")
-            if committed.returncode:
+    base = resolve_diff_base(workspace, base_branch)
+    if base is not None:
+        merge = _git(workspace, "merge-base", base, "HEAD")
+        if merge.returncode:
+            return [], -1
+        merge_base = merge.stdout.strip()
+        if merge_base:
+            head_sha = _git(workspace, "rev-parse", "HEAD")
+            if head_sha.returncode:
                 return [], -1
-            _add_numstat(files, committed.stdout)
-            break
+            if head_sha.stdout.strip() != merge_base:
+                committed = _git(workspace, "diff", "--numstat", f"{merge_base}..HEAD")
+                if committed.returncode:
+                    return [], -1
+                _add_numstat(files, committed.stdout)
     working = _git(workspace, "diff", "--numstat", "HEAD")
     if working.returncode:
         return [], -1
@@ -695,7 +772,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
     review = _latest(rows, "review")
     architecture = _latest(rows, "architecture")
     docs = _latest(rows, "docs")
-    changed_files, changed_lines = collect_diff(workspace)
+    changed_files, changed_lines = collect_diff(workspace, policy.base_branch)
     implementer_identity = (implementer or "").strip()
     reviewer_identity = ""
     reviewer_approved = False

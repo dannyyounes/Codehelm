@@ -260,16 +260,21 @@ codehelm pr-create DEV-123 --title "Fix DEV-123" --body "Validated changes" --ex
 ```
 
 The command is dry-run by default. With `--execute`, CodeHelm verifies that
-the task is `awaiting_pr`, checks the worktree and branch, pushes the branch
-to `origin`, and creates a **draft** GitHub PR via `gh pr create`.
+the task is `awaiting_pr` when no quality policy is present, or `ready_for_pr`
+when `.codehelm/quality.yaml` is present, checks the worktree and branch,
+pushes the branch to `origin`, and creates a **draft** GitHub PR via
+`gh pr create`. When `--base` is omitted, the target branch is the policy
+`base_branch` if that key is set (for example `base_branch: staging`),
+otherwise `main`. An explicit `--base` still wins. Change counting uses the
+same policy key; see the quality contract section.
 It records `pr_created` and the returned URL. It does not merge, approve,
 or transition Jira issues. `merge-ready` is a separate command and is off
 unless the quality policy sets `auto_merge: true`. An explicit `jira-transition` command posts one
 transition id; a dry run does not call Jira. The scheduler posts one only when
 `jira_transitions` maps the new state, and that post stays a dry run unless
 `jira_transition_execute` is true. `pr-create` does not transition Jira.
-Push/PR failures retain
-`awaiting_pr` for manual inspection; retries can require checking for an
+Push/PR failures retain the same required status (`awaiting_pr` or
+`ready_for_pr`) for manual inspection; retries can require checking for an
 existing remote PR.
 
 **Caution:** This prototype checks for a clean tree, not that every desired
@@ -553,6 +558,49 @@ omitted. When `risk_patterns` is omitted or null, a small built-in content
 scanner runs. A configured mapping replaces that set. `risk_patterns: {}`
 turns content scanning off. `gate_runner` defaults to `namespace`.
 `approval_signature` defaults to `off`. `auto_merge` defaults to `false`.
+`base_branch` is optional. Set it when the integration branch is not
+`main` or `master`:
+
+```yaml
+schema_version: 1
+base_branch: staging
+```
+
+When set, change counting uses that name as the preferred integration ref, and
+an omitted `pr-create --base` passes the same name to `gh pr create --base`
+(`default_pr_base`). Diff resolution for counting tries
+`refs/heads/<base_branch>`, then `refs/remotes/origin/<base_branch>`, then
+`main`, `master`, `origin/main`, and `origin/master` (same `refs/heads` /
+`refs/remotes/origin` form) so a tag with the same name cannot win. Committed
+lines are `git merge-base <base> HEAD` through `HEAD` (`merge-base..<HEAD>`
+numstat), plus the working tree and untracked files. `pr-create` does not
+walk that fallback chain; it uses the policy string, or `main` when the key
+is absent. Without a resolvable counting base, committed changes can look
+empty after commit even though the worktree was dirty before; set
+`base_branch` for those repos. A present value must be a nonempty string that
+passes `git check-ref-format refs/heads/<name>` (not `--branch`, which expands
+checkout shorthands like `@{-1}`). Names equal to `HEAD` or `@`, starting with
+`-`, or containing `@{`, are refused. Null, empty, non-string, or invalid
+names fail closed when the policy loads. An explicit `pr-create --base` still
+wins over the policy default.
+
+Configure and verify:
+
+```bash
+# policy load, resolve_diff_base, collect_diff, and pr-create default/override
+pytest tests/test_base_branch.py
+
+# operator check (needs a ready_for_pr task and authenticated gh):
+# 1) set base_branch: staging in .codehelm/quality.yaml
+# 2) commit on a branch based on staging — scoring must still see changed lines
+# 3) dry-run first (prints only; does not show the chosen base)
+codehelm pr-create DEV-123 --title "T" --body "B"
+# 4) omit --base with --execute → draft PR targets staging
+# 5) pass --base develop with --execute → draft PR targets develop instead
+codehelm pr-create DEV-123 --title "T" --body "B" --execute
+codehelm pr-create DEV-123 --title "T" --body "B" --base develop --execute
+```
+
 `jira_transitions` defaults to off. A nonempty mapping names the only states
 the scheduler may post: `awaiting_validation`, `failed`, `blocked`,
 `awaiting_human_approval`, `ready_for_pr`, and `completed`. Each value is a
@@ -580,7 +628,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
-| Diff size and risk paths | `git` numstat plus policy globs, and `risk_patterns` | Repository state. When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
+| Diff size and risk paths | `resolve_diff_base` then `collect_diff` (`merge-base..<HEAD` numstat plus working-tree/untracked), policy globs, and `risk_patterns` | Repository state. Optional `base_branch` is preferred before the main/master fallbacks; lookups use only `refs/heads/<name>` and `refs/remotes/origin/<name>` (order: policy base, `origin/<base>`, `main`, `master`, `origin/main`, `origin/master`). When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
 | Human approval | `quality-approve` stores the GitHub login and a sha256 digest of the workspace diff | A later change makes that approval not count. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
