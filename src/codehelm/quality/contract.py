@@ -3,8 +3,9 @@
 Agent-written evidence JSON is not accepted. Test, security, review, documentation
 and diff inputs come from rows the orchestrator stored after running those checks,
 or from git. A passing test exit code does not verify acceptance criteria. A
-criterion counts only when the test process the orchestrator ran emits a
-CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval stores the
+criterion counts when the latest test report for it on this attempt passed,
+or an operator attests it. An earlier failed report does not cancel a later
+pass. A passing human attestation still verifies the criterion. Human approval stores the
 GitHub login captured when quality-approve ran and a sha256 digest of the
 working tree against the resolved merge-base. Committing that same content
 leaves the digest unchanged. A content edit makes that approval not count.
@@ -707,11 +708,33 @@ def _risks_for(paths: list[str], policy: QualityPolicy, workspace: Path | None =
 
 
 def _latest(rows, gate: str):
+    """Latest row for this gate on the attempt. An earlier row does not count."""
     chosen = None
     for row in rows:
         if row.gate == gate:
             chosen = row
     return chosen
+
+
+def _verified_acceptance(rows) -> list[str]:
+    """Criteria verified on this attempt.
+
+    The latest test_report row for each criterion is the one that counts.
+    A passing human attestation still verifies that criterion.
+    """
+    human: set[str] = set()
+    reports: dict[str, bool] = {}
+    for row in rows:
+        if row.gate != "acceptance":
+            continue
+        name = row.detail.strip()
+        if not name:
+            continue
+        if row.source == "human" and row.passed:
+            human.add(name)
+        elif row.source == "test_report":
+            reports[name] = bool(row.passed)
+    return sorted(human | {name for name, passed in reports.items() if passed})
 
 
 def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
@@ -726,19 +749,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
             if row.gate == "acceptance_planned" and row.source == "plan" and row.detail.strip()
         ]
     rows = store.evidence_for(task_id, attempt)
-    human_verified = {
-        row.detail.strip() for row in rows
-        if row.gate == "acceptance" and row.source == "human" and row.passed and row.detail.strip()
-    }
-    report_passed = {
-        row.detail.strip() for row in rows
-        if row.gate == "acceptance" and row.source == "test_report" and row.passed and row.detail.strip()
-    }
-    report_failed = {
-        row.detail.strip() for row in rows
-        if row.gate == "acceptance" and row.source == "test_report" and not row.passed and row.detail.strip()
-    }
-    verified = sorted(human_verified | (report_passed - report_failed))
+    verified = _verified_acceptance(rows)
     accepted_debts = {
         row.detail.strip() for row in rows
         if row.gate == "quality_debt" and row.source == "human" and row.passed
