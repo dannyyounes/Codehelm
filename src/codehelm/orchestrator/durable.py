@@ -60,6 +60,31 @@ class DispatchBudget:
             raise ValueError("Invalid dispatch budget")
 
 
+_FEEDBACK_LIMIT = 8000
+_FEEDBACK_GATES = frozenset({
+    "tests", "security", "architecture_check", "prepare", "review", "architecture", "docs",
+})
+
+
+def with_previous_attempt_feedback(prompt: str, store: TaskStore, prefix: str,
+                                   story_id: str, attempt: int) -> str:
+    """Append the previous attempt's latest failing detail, cut at 8000 characters."""
+    if attempt < 2:
+        return prompt
+    task_id = f"{prefix}-{story_id}-A{attempt - 1}"
+    feedback = ""
+    for row in store.evidence_for(task_id, attempt - 1):
+        if not row.passed and row.gate in _FEEDBACK_GATES and (row.detail or "").strip():
+            feedback = row.detail.strip()
+    if not feedback:
+        task = store.get(task_id)
+        if task is not None and task.status == "failed":
+            feedback = (task.error or "").strip()
+    if not feedback:
+        return prompt
+    return f"{prompt}\n\nPrevious attempt feedback to address\n{feedback[:_FEEDBACK_LIMIT]}"
+
+
 def resolve_max_attempts(policy, requested: int | None) -> int:
     if requested is not None:
         return requested
@@ -392,6 +417,8 @@ class DurableScheduler:
         The coding agent is started only when this attempt has no task row yet.
         That start is LifecycleEngine.execute, which runs prepare_cmd on the host
         first when the policy sets it. A failing prepare does not start the agent.
+        On attempt 2 or later the prompt gains previous-attempt feedback when
+        failing review, gate, or agent-error text is already stored.
         Gate commands and model reviews that already passed for the attempt are
         not repeated. A green test exit code does not verify acceptance criteria.
         Only a CODEHELM_ACCEPTANCE line from that test process does.
@@ -416,6 +443,8 @@ class DurableScheduler:
         if task is None:
             if heartbeat is not None and not heartbeat():
                 raise ClaimLost("Claim lost before the coding agent started")
+            prompt = with_previous_attempt_feedback(
+                prompt, self.store, self.prefix, story_id, attempts)
             result = engine.execute(
                 task_id, prompt, provider, agent_timeout, transport=transport)
             if transport != "http":

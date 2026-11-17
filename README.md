@@ -629,6 +629,8 @@ Scoring reads the latest row of each gate on the attempt, so a later failure als
 `schedule-retry` still starts a new attempt for a failed, blocked, or
 interrupted story. `ready_for_pr` does not unlock dependent stories.
 
+When that new attempt starts the coding agent, the prompt keeps its original text and, when the previous attempt has one, appends the heading `Previous attempt feedback to address` plus that attempt's latest failing review or gate detail from `quality_evidence`, or that task's error when the agent itself failed and no such detail is stored. The added text is cut at 8000 characters and is read from those existing SQLite rows when the prompt is built. Attempt 1, and a retry with no such detail, stay unchanged. Local one-off plan files matching `.codehelm/plan-*.json` are gitignored; files already tracked stay tracked. Saving or applying the previous attempt's code or patch, persisting context in new storage, races between retry admission and claiming, and shell-quoting of paths are out of scope by design; nothing is shelled. The threat model is an honest local operator.
+
 Verify with `pytest tests/test_blocked_resume.py`.
 
 ## Budget ledger and safe scheduler checkpoints (v1.3)
