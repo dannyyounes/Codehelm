@@ -88,6 +88,7 @@ _POLICY_FIELDS = {
     "jira_transitions",
     "jira_transition_execute",
     "base_branch",
+    "pr_ready",
 }
 _JIRA_TRANSITION_STATES = frozenset({
     "awaiting_validation", "failed", "blocked",
@@ -171,6 +172,7 @@ class QualityPolicy:
     jira_transitions: tuple[tuple[str, str], ...] = ()
     jira_transition_execute: bool = False
     base_branch: str = ""
+    pr_ready: bool = False
 
     @staticmethod
     def absent() -> "QualityPolicy":
@@ -447,6 +449,10 @@ def load_policy(path: Path) -> QualityPolicy:
         auto_merge = False
     else:
         auto_merge = _require_bool(data["auto_merge"], "auto_merge")
+    if "pr_ready" not in data or data["pr_ready"] is None:
+        pr_ready = False
+    else:
+        pr_ready = _require_bool(data["pr_ready"], "pr_ready")
     jira_transitions = _load_jira_transitions(data)
     if "jira_transition_execute" not in data or data["jira_transition_execute"] is None:
         jira_transition_execute = False
@@ -479,6 +485,7 @@ def load_policy(path: Path) -> QualityPolicy:
         jira_transitions=jira_transitions,
         jira_transition_execute=jira_transition_execute,
         base_branch=_load_base_branch(data),
+        pr_ready=pr_ready,
     )
 
 

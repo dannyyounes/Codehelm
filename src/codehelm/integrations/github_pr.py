@@ -130,8 +130,12 @@ def github_user_login() -> str:
 
 
 def publish_pr(workspace: Path, branch: str, title: str, body: str,
-               base: str = "main", remote: str = "origin") -> PullRequest:
-    """Push an existing committed branch and create a draft PR; never merge."""
+               base: str = "main", remote: str = "origin", draft: bool = True) -> PullRequest:
+    """Push an existing committed branch and create a pull request; never merge.
+
+    ``draft`` defaults to true and passes ``--draft``. A ready pull request
+    omits that flag. This function does not merge.
+    """
     workspace = Path(workspace).resolve()
     if not workspace.is_dir():
         raise PullRequestError("Workspace does not exist")
@@ -149,8 +153,11 @@ def publish_pr(workspace: Path, branch: str, title: str, body: str,
     _run(["gh", "auth", "status"], workspace)
     # Network write occurs only after caller has explicitly requested execution.
     _run(["git", "push", "-u", remote, branch], workspace)
-    output = _run(["gh", "pr", "create", "--draft", "--base", base,
-                   "--head", branch, "--title", title, "--body", body], workspace)
+    create = ["gh", "pr", "create"]
+    if draft:
+        create.append("--draft")
+    create.extend(["--base", base, "--head", branch, "--title", title, "--body", body])
+    output = _run(create, workspace)
     url = output.splitlines()[-1].strip()
     if not url.startswith("https://github.com/"):
         raise PullRequestError("PR command did not return a GitHub URL")

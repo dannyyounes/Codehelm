@@ -13,11 +13,11 @@ Implemented in this repository:
 - Opt-in HTTP transport for those same three providers, off unless `--transport http` is set
 - Single-task lifecycle, dependency-aware dispatch, and a durable SQLite scheduler with bounded attempts, leases, and explicit retry
 - Estimated token/USD reservations and an additional-AUD admission budget
-- Test, security, and independent-review gates, a documentation agent, a second validation pass, draft GitHub pull requests, and optional Jira Cloud REST
+- Test, security, and independent-review gates, a documentation agent, a second validation pass, GitHub pull requests (draft unless `--ready` or `pr_ready: true`), and optional Jira Cloud REST
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 - DesignFlow screen and form mockups, inline comments, and an explicit agent revision loop
 
-There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. `pr-create` opens a draft pull request unless `--ready` is passed or `pr_ready` is true; `--draft` forces a draft. That command does not merge. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -323,32 +323,80 @@ Review is a model verdict, not human merge authorization. When
 `.codehelm/quality.yaml` is present, a passing post-documentation run is
 scored by the quality contract instead of moving straight to `awaiting_pr`.
 
-## GitHub draft pull requests (v0.8)
+## GitHub pull requests (v0.8)
 
 Requires GitHub CLI `gh` installed and authenticated, a GitHub `origin`
 remote, and a clean task worktree with committed changes.
 
 ```bash
+codehelm pr-create DEV-123 --title "Fix DEV-123" --body "Validated changes"
 codehelm pr-create DEV-123 --title "Fix DEV-123" --body "Validated changes" --execute
+codehelm pr-create DEV-123 --title "Fix DEV-123" --body "Validated changes" --ready --execute
+codehelm pr-create DEV-123 --title "Fix DEV-123" --body "Validated changes" --draft --execute
 ```
 
-The command is dry-run by default. With `--execute`, CodeHelm verifies that
-the task is `awaiting_pr` when no quality policy is present, or `ready_for_pr`
-when `.codehelm/quality.yaml` is present, checks the worktree and branch,
-pushes the branch to `origin`, and creates a **draft** GitHub PR via
-`gh pr create`. When `--base` is omitted, the target branch is the policy
-`base_branch` if that key is set (for example `base_branch: staging`),
-otherwise `main`. An explicit `--base` still wins. Change counting uses the
-same policy key; see the quality contract section.
-It records `pr_created` and the returned URL. It does not merge, approve,
-or transition Jira issues. `merge-ready` is a separate command and is off
-unless the quality policy sets `auto_merge: true`. An explicit `jira-transition` command posts one
-transition id; a dry run does not call Jira. The scheduler posts one only when
-`jira_transitions` maps the new state, and that post stays a dry run unless
-`jira_transition_execute` is true. `pr-create` does not transition Jira.
+The command is dry-run by default. It loads `.codehelm/quality.yaml` from the
+current working directory. `--repo` selects the Git repository and leaves
+that policy path unchanged. The dry run prints one of these lines and returns.
+It does not check the task, push, or call `gh`:
+
+```text
+Dry run. Add --execute to push branch and create a draft PR.
+Dry run. Add --execute to push branch and create a ready PR.
+```
+
+The pull request is a **draft** unless `--ready` is passed or `pr_ready` is
+the boolean `true`. `--draft` forces a draft, including when `--ready` and
+`pr_ready: true` are both set. A missing policy file, an omitted key,
+`pr_ready: false`, and a null `pr_ready:` stay draft. A non-boolean, including
+the string `'true'`, fails load with `pr_ready must be a boolean` and exits 1
+before the dry-run line.
+
+With `--execute`, CodeHelm verifies that the task is `awaiting_pr` when no
+quality policy file is present, or `ready_for_pr` when
+`.codehelm/quality.yaml` is present, checks the worktree and branch, pushes
+with `git push -u origin <branch>`, and runs `gh pr create`. A draft command
+is `gh pr create --draft --base <base> --head <branch> --title <title>
+--body <body>`. A ready pull request uses that same argument list with
+`--draft` omitted. CodeHelm does not run `gh pr ready` or any merge command.
+Success prints `Draft pull request created: <url>` or `Pull request created:
+<url>` and records `pr_created` with that URL. When `--base` is omitted, the
+target branch is the policy `base_branch` if that key is set (for example
+`base_branch: staging`), otherwise `main`. An explicit `--base` still wins.
+Change counting uses the same policy key; see the quality contract section.
+It does not approve or transition Jira issues. `merge-ready` is a separate
+command and is off unless the quality policy sets `auto_merge: true`. An
+explicit `jira-transition` command posts one transition id; a dry run does
+not call Jira. The scheduler posts one only when `jira_transitions` maps the
+new state, and that post stays a dry run unless `jira_transition_execute` is
+true. `pr-create` does not transition Jira.
 Push/PR failures retain the same required status (`awaiting_pr` or
 `ready_for_pr`) for manual inspection; retries can require checking for an
 existing remote PR.
+
+`jira-link-pr` links a `pr_created` task whose stored value starts with
+`https://github.com/`. The comment is `CodeHelm draft pull request: <url>`
+for a ready pull request and for a draft. `schedule-complete` accepts
+`pr_created` and then asks `gh pr view` whether that URL is `MERGED`. A task
+that is missing or not `pr_created` raises
+`A draft PR must exist before manual completion`.
+
+Verify the choice without GitHub:
+
+```bash
+pytest tests/test_github_pr.py
+codehelm pr-create --help
+codehelm pr-create DEV-123 --title "T" --body "B"
+codehelm pr-create DEV-123 --title "T" --body "B" --ready
+```
+
+`--help` describes `--execute` as pushing and creating the pull request,
+`--ready` as creating a ready pull request instead of a draft, and `--draft`
+as forcing a draft even when `pr_ready` or `--ready` is set. With no policy
+file, or with `pr_ready` omitted, null, or false, the dry run without flags
+prints `create a draft PR.` and `--ready` prints `create a ready PR.` With
+`pr_ready: true`, the dry run without flags prints `create a ready PR.` and
+`--draft` prints `create a draft PR.`
 
 **Caution:** This prototype checks for a clean tree, not that every desired
 change has been committed or that remote branch protections are configured.
@@ -369,8 +417,14 @@ codehelm jira-transition DEV-123 --id 31
 codehelm jira-transition DEV-123 --id 31 --execute
 ```
 
-`jira-link-pr` posts the recorded GitHub draft PR URL as a comment on
-a Jira issue whose key matches the task ID. It does not change Jira status.
+`jira-link-pr` posts `CodeHelm draft pull request: <url>` on the Jira issue
+whose key matches the task ID. The task must be `pr_created`, and the stored
+value must start with `https://github.com/`. A ready pull request uses that
+same comment. It does not change Jira status. Success prints
+`Linked draft PR to <task-id>; Jira status unchanged`. A task that is not
+`pr_created`, or has an empty stored value, raises `Task must have a recorded
+draft PR before linking`. A non-empty value that does not start with
+`https://github.com/` raises `Stored PR URL is invalid`.
 
 `jira-transition KEY --id TRANSITION_ID` prints a dry-run line that names
 the key and the transition id and does not call Jira. With `--execute` it
@@ -440,7 +494,7 @@ flag is a **manual assertion**, not a verified PR/Jira completion signal. Do
 not assert completion until review, documentation, post-doc validation and
 required human merge approval are satisfied. When `.codehelm/quality.yaml` is
 present, `--completed` is refused. Use `schedule-complete` after the story is
-`ready_for_pr`, a draft PR is recorded, and a person has confirmed the merge.
+`ready_for_pr`, a pull request is recorded (`pr_created`), and a person has confirmed the merge.
 Existing dispatched task IDs are not rerun automatically. This command still
 has no automatic cross-branch integration, dependency merge, distributed
 locking, or provider quotas. Durable scheduler state and estimated budgets
@@ -634,6 +688,14 @@ omitted. When `risk_patterns` is omitted or null, a small built-in content
 scanner runs. A configured mapping replaces that set. `risk_patterns: {}`
 turns content scanning off. `gate_runner` defaults to `namespace`.
 `approval_signature` defaults to `off`. `auto_merge` defaults to `false`.
+`pr_ready` defaults to `false` when the policy file is missing, the key is
+omitted, or the value is null. Set `pr_ready: true` (a YAML boolean) to make
+`pr-create` open a ready pull request. A non-boolean, including `'true'`,
+fails load with `pr_ready must be a boolean`. `--draft` forces a draft, and
+`--ready` opens a ready pull request when the key is false or absent.
+`--draft` wins when both flags are passed. Neither path merges or runs
+`gh pr ready`. Usage and checks are in the GitHub pull requests section;
+`pytest tests/test_github_pr.py` covers the policy and the CLI wiring.
 `base_branch` is optional. Set it when the integration branch is not
 `main` or `master`:
 
