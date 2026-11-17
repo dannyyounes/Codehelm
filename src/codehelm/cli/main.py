@@ -25,7 +25,9 @@ from decimal import Decimal, InvalidOperation
 from codehelm.planning.planner import (
     assign_published_keys, generate_plan, load_plan, replace_plan, save_plan,
     publish_plan_to_jira, PlanningError)
-from codehelm.quality.contract import assess, auto_merge_block, decision_error, load_policy, task_attempt
+from codehelm.quality.contract import (
+    assess, auto_merge_block, decision_error, default_pr_base, load_policy, task_attempt,
+)
 from codehelm.quality.diffdigest import diff_digest
 from codehelm.quality.signatures import signature_blob, verify_approval_signature
 from codehelm.designflow.cli import designflow_app
@@ -182,7 +184,10 @@ def pr_create(
     task_id: str,
     title: str = typer.Option(..., help="Pull request title"),
     body: str = typer.Option(..., help="Pull request description"),
-    base: str = typer.Option("main", help="Target branch"),
+    base: str | None = typer.Option(
+        None,
+        help="Target branch; defaults to quality policy base_branch when set, otherwise main",
+    ),
     repo: Path = typer.Option(Path("."), help="Original Git repository"),
     execute: bool = typer.Option(False, help="Explicitly push branch and create draft PR"),
 ) -> None:
@@ -191,8 +196,9 @@ def pr_create(
         typer.echo("Dry run. Add --execute to push branch and create a draft PR.")
         return
     try:
+        target = base if base is not None else default_pr_base(load_policy(STATE_DIR / "quality.yaml"))
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        url = engine.create_pull_request(task_id, title, body, base)
+        url = engine.create_pull_request(task_id, title, body, target)
     except (ValueError, WorktreeError, PullRequestError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
