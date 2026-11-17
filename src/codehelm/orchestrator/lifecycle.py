@@ -343,13 +343,22 @@ def _contract_stages(policy) -> list[tuple[str, str]]:
     return stages
 
 
-def _has_passing_human_docs(rows: list[EvidenceRow]) -> bool:
-    """True when this attempt already has a human docs exception."""
-    return any(
+def _human_docs_row(row: EvidenceRow) -> bool:
+    return bool(
         row.gate == "docs" and row.source == "human" and row.passed
         and row.detail.strip() and row.identity.strip()
-        for row in rows
     )
+
+
+def _has_passing_human_docs(rows: list[EvidenceRow]) -> bool:
+    """True when this attempt already has a human docs exception."""
+    return any(_human_docs_row(row) for row in rows)
+
+
+def _note_human_docs(rows: list[EvidenceRow], seen: dict[str, int]) -> None:
+    for index, row in enumerate(rows):
+        if _human_docs_row(row):
+            seen["docs"] = index
 
 
 def _stage_match(row: EvidenceRow, kind: str) -> bool:
@@ -379,16 +388,55 @@ def _stage_ok(row: EvidenceRow, kind: str, implementer: str) -> bool:
     return False
 
 
-def _next_stage_row(rows: list[EvidenceRow], cursor: int, gate: str, kind: str,
-                    implementer: str) -> int | str | None:
-    """Index of the passing row, 'fail' for a completed rejection, or None if missing."""
-    for index, row in enumerate(rows):
-        if index <= cursor or row.gate != gate or not _stage_match(row, kind):
-            continue
-        if _stage_ok(row, kind, implementer):
-            return index
-        return "fail"
+def _latest_passing_index(rows: list[EvidenceRow], gate: str, kind: str,
+                          implementer: str, start: int, end: int) -> int | None:
+    """Index of the latest matching row in [start, end) when that row passed."""
+    latest = None
+    for index in range(start, end):
+        row = rows[index]
+        if row.gate == gate and _stage_match(row, kind):
+            latest = index
+    if latest is not None and _stage_ok(rows[latest], kind, implementer):
+        return latest
     return None
+
+
+def _first_index(rows: list[EvidenceRow], gate: str, kind: str) -> int | None:
+    for index, row in enumerate(rows):
+        if row.gate == gate and _stage_match(row, kind):
+            return index
+    return None
+
+
+def _stage_satisfaction(rows: list[EvidenceRow], stages: list[tuple[str, str]],
+                        pending: int, seen: dict[str, int], gate: str, kind: str,
+                        implementer: str) -> tuple[int | None, bool]:
+    """Return (passing index, consume) for this stage visit.
+
+    Satisfaction is the latest row for this gate in the visit. Rows for other
+    gates in between do not hide a later pass. A post-docs repeat of the same
+    gate only sees rows after the docs row and after the earlier visit's row.
+    A pass owned by that later visit is not consumed here.
+    """
+    docs_at = next((index for index, stage in enumerate(stages) if stage[1] == "docs"), None)
+    repeated = sum(stage_gate == gate for stage_gate, _kind in stages) > 1
+    if not repeated:
+        return _latest_passing_index(rows, gate, kind, implementer, 0, len(rows)), True
+    if docs_at is not None and pending > docs_at:
+        start = seen.get("docs", -1) + 1
+        prior = seen.get(gate)
+        if prior is not None:
+            start = max(start, prior + 1)
+        return _latest_passing_index(rows, gate, kind, implementer, start, len(rows)), True
+    split = _first_index(rows, "docs", "docs")
+    end = len(rows) if split is None else split
+    found = _latest_passing_index(rows, gate, kind, implementer, 0, end)
+    if found is not None:
+        return found, True
+    if split is None:
+        return None, False
+    later = _latest_passing_index(rows, gate, kind, implementer, split, len(rows))
+    return (later, False) if later is not None else (None, False)
 
 
 class LifecycleEngine:
@@ -680,10 +728,13 @@ class LifecycleEngine:
                            story_id: str | None = None, **story):
         """Run missing quality stages for one attempt, then score recorded evidence.
 
-        Stages that already have a passing row for this attempt are not repeated.
-        A passing human docs exception on this attempt satisfies documentation
-        without launching the documentation agent. A failing row fails closed
-        and does not launch later model calls.
+        Each stage is decided on its own. It is skipped when the latest row for
+        that gate in this visit passed. A later pass supersedes an earlier
+        failure, and rows for other gates in between do not hide it. A passing
+        human docs exception satisfies documentation without launching the
+        documentation agent. A stage with no passing row runs once; a new
+        failure is scored immediately and does not launch later stages. Scoring
+        uses the latest stored row for each gate on this attempt.
         """
         policy = self._policy()
         if not policy.present:
@@ -706,7 +757,7 @@ class LifecycleEngine:
                 task_id, attempt, policy, None, acceptance_criteria, story_id, implementer)
             return decision
 
-        cursor = -1
+        seen: dict[str, int] = {}
         pending = 0
         docs_index = next((index for index, stage in enumerate(stages) if stage[1] == "docs"), None)
         while pending < len(stages):
@@ -714,14 +765,14 @@ class LifecycleEngine:
             gate, kind = stages[pending]
             rows = self.store.evidence_for(task_id, attempt)
             if kind == "docs" and _has_passing_human_docs(rows):
+                _note_human_docs(rows, seen)
                 pending += 1
                 continue
-            outcome = _next_stage_row(rows, cursor, gate, kind, implementer)
-            if outcome == "fail":
-                return self._score_contract(
-                    task_id, attempt, policy, workspace, acceptance_criteria, story_id, implementer)
-            if isinstance(outcome, int):
-                cursor = outcome
+            found, consume = _stage_satisfaction(
+                rows, stages, pending, seen, gate, kind, implementer)
+            if found is not None:
+                if consume:
+                    seen[gate] = found
                 pending += 1
                 continue
             post = docs_index is not None and pending > docs_index
@@ -733,11 +784,20 @@ class LifecycleEngine:
                 timeout=timeout, docs_timeout=docs_timeout, implementer=implementer,
                 acceptance_criteria=acceptance_criteria, **story)
             recorded = self.store.evidence_for(task_id, attempt)
+            passed_at = _latest_passing_index(
+                recorded, gate, kind, implementer, before, len(recorded))
+            if passed_at is not None:
+                seen[gate] = passed_at
+                pending += 1
+                continue
             if len(recorded) <= before:
                 if kind == "docs" and _has_passing_human_docs(recorded):
+                    _note_human_docs(recorded, seen)
                     pending += 1
                     continue
                 raise RuntimeError(f"Quality stage {gate} did not record evidence")
+            return self._score_contract(
+                task_id, attempt, policy, workspace, acceptance_criteria, story_id, implementer)
         self._beat(heartbeat)
         return self._score_contract(
             task_id, attempt, policy, workspace, acceptance_criteria, story_id, implementer)

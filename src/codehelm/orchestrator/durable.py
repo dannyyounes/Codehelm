@@ -337,12 +337,12 @@ class DurableScheduler:
             return selected
 
     def reclaim_interrupted(self, story_id: str) -> None:
-        """Re-claim one interrupted story on the same attempt.
+        """Re-claim one interrupted or quality-blocked story on the same attempt.
 
         Attempts stay as they are. The task row for that attempt must exist and
         must not be queued, running, failed, or pr_created. A missing quality
         policy does not block this single-story reclaim. Other stories are left
-        untouched, and a story that is not interrupted is not moved.
+        untouched. Any other dispatch state is not moved.
         """
         if not any(story.id == story_id for story in self.plan.stories):
             raise ValueError("Unknown story")
@@ -352,7 +352,7 @@ class DurableScheduler:
             row = db.execute(
                 "SELECT state, attempts FROM dispatches WHERE prefix=? AND story_id=?",
                 (self.prefix, story_id)).fetchone()
-            if row is None or row[0] != "interrupted" or row[1] < 1:
+            if row is None or row[0] not in {"interrupted", "blocked"} or row[1] < 1:
                 raise ValueError("Story is not interrupted")
             task_id = f"{self.prefix}-{story_id}-A{row[1]}"
             task = db.execute(
@@ -361,7 +361,7 @@ class DurableScheduler:
                 raise ValueError("Task is not resumable")
             result = db.execute(
                 """UPDATE dispatches SET state='claimed', claimed_at=?, error=NULL
-                   WHERE prefix=? AND story_id=? AND state='interrupted'""",
+                   WHERE prefix=? AND story_id=? AND state IN ('interrupted', 'blocked')""",
                 (timestamp, self.prefix, story_id))
             if result.rowcount != 1:
                 raise ValueError("Story is not interrupted")

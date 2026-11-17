@@ -27,6 +27,13 @@ codehelm pr-create --help
 ```
 Documentation-agent story context, documentation-path checks, and an already-included documentation diff are covered by `tests/test_documentation.py`. Verify with `pytest tests/test_documentation.py`.
 
+Resuming a quality-blocked story on the same attempt is covered by `tests/test_blocked_resume.py`. `codehelm resume --execute` re-claims dispatch state `interrupted` or `blocked`, does not launch the coding agent, and does not allocate a new attempt. A stage runs again only when the latest row in that visit did not pass. A later pass supersedes an earlier failure, including when another gate's row is in between. A passing human docs exception skips the documentation agent; post-docs visits still run when their passing rows are from before that docs evidence. Scoring uses the latest row per gate and the latest acceptance `test_report` per criterion. A passing human attestation still verifies a criterion. Task status `queued`, `running`, `failed`, or `pr_created` is refused, and so is a `failed` dispatch. Verify with:
+
+```bash
+pytest tests/test_blocked_resume.py
+codehelm resume --help
+```
+
 Namespace gate stage directories are covered by `tests/test_gate_sandbox.py`. Each bind is a new directory under `/dev/shm` (`codehelm-ws-` for the workspace; `codehelm-keep0-`, `codehelm-keep1-`, and so on for an interpreter directory that would be covered). The name does not include the process id. `unshare --pid --fork` runs the sandbox as pid 1, so concurrent namespace gates do not share a stage path. CodeHelm unmounts and removes the directories before the gate command replaces the process. If that unmount fails, the directory can remain under `/dev/shm`. The container runner does not create them. Verify with:
 
 ```bash

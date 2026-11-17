@@ -57,7 +57,7 @@ Worktrees are created in a sibling `<repo>-worktrees` directory. Removal refuses
 
 `codehelm --help` lists the commands that exist today: `init`, `status`, `run`, `validate`, `document`, `validate-after-docs`, `pr-create`, worktrees, providers, planning, Jira, durable scheduling, budgets, the v1.7 quality commands, and `designflow`.
 
-`codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues an interrupted durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it names the task and does not change dispatch state. With `--execute` it re-claims that interrupted story and carries the same attempt forward. It refuses to relaunch a queued, running, or failed coding agent. `resume` accepts the same `--agent-timeout` and `--gate-timeout` bounds as `schedule-durable` (see Durable scheduling). `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
+`codehelm agents` lists task rows in `.codehelm/state.db`: one line each with id, status, provider, and updated_at. Queued and running tasks come first, then other tasks by updated_at descending. The default limit is 20 and `--limit` accepts 1 to 100. It does not launch an agent. `codehelm resume <task-id>` continues one interrupted or quality-blocked durable story on the same attempt. The task id must look like `PREFIX-STORY-An` (for example `PLAN-S1-A1`). Without `--execute` it prints a dry run and does not change dispatch state. With `--execute` it re-claims dispatch state `interrupted` or `blocked`, keeps that attempt, and does not launch the coding agent. Stage rules, refusals, and the verify command are under Durable scheduling. It refuses task status `queued`, `running`, `failed`, or `pr_created`. `resume` accepts the same `--agent-timeout` and `--gate-timeout` bounds as `schedule-durable`. `schedule-retry` is still how a new attempt starts. Expired claims are marked with `schedule-recover` and retried explicitly with `schedule-retry`. That retry starts a new attempt; it does not resume an in-memory model session.
 
 ## Design principles
 
@@ -575,7 +575,7 @@ codehelm schedule-retry S1 --plan-file .codehelm/plan.json --prefix PLAN --execu
 codehelm schedule-complete S1 --plan-file .codehelm/plan.json --prefix PLAN --confirmed-merged --execute
 ```
 
-`schedule-durable` and `resume` accept `--agent-timeout` (default 600, range 1..7200) and `--gate-timeout` (default 300, range 1..7200). `--agent-timeout` bounds the coding agent and, when a quality policy continues the claim, the documentation agent. `--gate-timeout` bounds test/security commands and model reviews on that same path. `resume` still does not relaunch a queued, running, or failed coding agent; `--agent-timeout` then applies only if that attempt still runs the documentation agent. Dry runs do not start agents or gates. Out-of-range values are rejected by the CLI. `codehelm run` and `codehelm agent-run` keep their own `--timeout` (default 600, max 3600) and are unchanged by these flags. `prepare_cmd`, when set, uses a fixed 900 second host timeout on the `execute` path and ignores `--agent-timeout`, `--gate-timeout`, and `run --timeout`.
+`schedule-durable` and `resume` accept `--agent-timeout` (default 600, range 1..7200) and `--gate-timeout` (default 300, range 1..7200). `--agent-timeout` bounds the coding agent and, when a quality policy continues the claim, the documentation agent. `--gate-timeout` bounds test/security commands and model reviews on that same path. `resume` does not launch the coding agent for an interrupted or blocked story; a queued, running, failed, or `pr_created` task is refused. `--agent-timeout` applies when that attempt runs the documentation agent. Dry runs do not start agents or gates. Out-of-range values are rejected by the CLI. `codehelm run` and `codehelm agent-run` keep their own `--timeout` (default 600, max 3600) and are unchanged by these flags. `prepare_cmd`, when set, uses a fixed 900 second host timeout on the `execute` path and ignores `--agent-timeout`, `--gate-timeout`, and `run --timeout`.
 SQLite records story dispatch states and attempts. Atomic claims prevent
 multiple scheduler processes from claiming the same story. Limits cap
 concurrent claims, per-story attempts, and total attempts. Each retry uses a
@@ -606,12 +606,30 @@ A passing test exit code does not attest acceptance criteria. The test
 process can verify a criterion by printing a `CODEHELM_ACCEPTANCE` line, or
 by writing that line to `.codehelm/acceptance-report.txt` during the run. A
 high-risk path does not approve itself. With no policy file, a successful
-agent still stops at `awaiting_validation`. An interrupted coding agent is
-not relaunched.
-`schedule-durable` can resume an interrupted story on the same attempt only
-after the agent has already finished, and it skips gates that already passed.
+agent still stops at `awaiting_validation`. Resume does not relaunch the
+coding agent.
+`schedule-durable` auto-resumes only an `interrupted` story, and only when a
+quality policy file exists and the coding agent has already finished. It uses
+the same stage rules as `resume`. `codehelm resume --execute` re-claims one
+story whose dispatch state is `interrupted` or `blocked` and keeps that
+attempt (`PLAN-S1-A1` does not become `PLAN-S1-A2`). It does not take a
+second budget reservation.
+
+```bash
+codehelm resume PLAN-S1-A1
+codehelm resume PLAN-S1-A1 --prefix PLAN --plan-file .codehelm/plan.json \
+  --reviewer codex --test-cmd pytest --security-cmd bandit --execute
+```
+
+Without `--execute` the command prints `Dry run: resume PLAN-S1-A1 on the same attempt. Dispatch state unchanged and no coding agent launched.` and leaves dispatch state unchanged. With `--execute`, `--prefix` is required (`resume --execute requires --prefix`) and must match the task id (`Prefix must equal the prefix in PLAN-S1-A1`). When the policy requires review or architecture, `--reviewer` must be a different provider from the one stored on the task. `--test-cmd` (default `pytest`) and `--security-cmd` (default `bandit`) are the commands a re-run stage executes. `--gate-timeout` bounds those commands and model reviews. A missing policy file still re-claims the story, then settles it at `awaiting_validation` and runs no gates.
+
+When a policy is present, a stage is skipped only if the latest row for that gate in the current visit passed: exit code 0 for a command, or a passing review whose identity is set and is not the implementer. A later passing row supersedes an earlier failure. A row for another gate in between does not hide that pass. A later failing row does not count as a pass, so that stage runs again. When documentation is required, each required test, security, and review gate is visited again after the docs evidence. The second visit only sees rows after that evidence and after the row that satisfied the first visit, so a pass from before documentation does not skip it. If the first visit has no passing row, a later pass after the docs evidence is left for the second visit and the first visit does not re-run the command. A pass recorded by the first visit does not satisfy the second visit, so when that first visit runs and passes, the second visit still runs. A passing `docs-exception` (GitHub login and a nonempty reason) skips the documentation agent. Scoring still uses the latest docs row, so that exception verifies documentation when it is the latest docs row on the attempt. Each unsatisfied visit runs once. A stage that fails on this run is scored immediately and later stages do not start. The command prints `<story>: <status>`, for example `S1: ready_for_pr` or `S1: blocked`. A missing or matching `--reviewer`, when review or architecture is required, fails before the reclaim with `Quality policy requires --reviewer set to a different provider`.
+
+Scoring reads the latest row of each gate on the attempt, so a later failure also supersedes an earlier pass. The latest acceptance test report for a criterion supersedes an earlier report on that attempt. A passing human attestation still verifies that criterion even when the latest test report failed. Task status `queued`, `running`, `failed`, or `pr_created` is refused with `Coding agent will not be relaunched for <task-id>`. Any other dispatch state is refused with `Story <id> is not interrupted. schedule-retry starts a new attempt`. The attempt in the task id must be the current attempt (`Task id does not match the interrupted attempt`).
 `schedule-retry` still starts a new attempt for a failed, blocked, or
 interrupted story. `ready_for_pr` does not unlock dependent stories.
+
+Verify with `pytest tests/test_blocked_resume.py`.
 
 ## Budget ledger and safe scheduler checkpoints (v1.3)
 
@@ -804,7 +822,9 @@ A dry run does not create the worktree or run the command. `agent-run` and
 `worktree-create` do not call `execute`. `execute` refuses a task id that
 already has a row, so the same id does not run `prepare_cmd` again.
 `schedule-retry` allocates a new task id (`PREFIX-S1-A2`), and that id runs
-`prepare_cmd` again. `resume` leaves a failed task failed.
+`prepare_cmd` again. `resume` does not call `execute`, so it does not run
+`prepare_cmd` again. A task status of `queued`, `running`, `failed`, or
+`pr_created` is refused and left as it is.
 
 ```yaml
 schema_version: 1
@@ -906,7 +926,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged). A matching story is prepended to that prompt; see Quality gates for the task-id shape and the 12000-character cut | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check, an already-included documentation diff, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A workspace check on this attempt. No new edit still passes when the resolved-base diff already includes a documentation path, with detail `Documentation already included in the change`. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `resolve_diff_base` then `collect_diff` (`merge-base..<HEAD` numstat plus working-tree/untracked), policy globs, and `risk_patterns` | Repository state. Optional `base_branch` is preferred before the main/master fallbacks; lookups use only `refs/heads/<name>` and `refs/remotes/origin/<name>` (order: policy base, `origin/<base>`, `main`, `master`, `origin/main`, `origin/master`). When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
-| Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
+| Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing. Scoring uses the latest `test_report` row for that criterion on this attempt. A passing human attestation still verifies it |
 | Human approval | `quality-approve` stores the GitHub login and `diff_digest` for policy `base_branch` (cached binary diff of a temporary index after `git add -A` against the merge-base; `git diff HEAD` plus untracked file bytes when no base resolves) | Committing that same content leaves the approval in place only when a base resolved. A content edit makes that approval not count (`approval_diff_mismatch`, status `blocked`). A commit with no resolved base also changes the digest. An empty digest is not recorded. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. Later scoring does not call GitHub again |
 | Quality debt | `quality-debt` records the finding text and a nonempty reason (`source=human`, passed) | Accepts that exact unresolved finding on the current attempt. A debt from another attempt, or whose text does not match, is ignored. It does not waive the other gates |
 | Oversized-change justification | `quality-justify` records the GitHub login and the reason | A dry run does not call GitHub. A row with no identity does not count. Later scoring does not call GitHub again |
@@ -917,7 +937,7 @@ A test verifies one criterion only by emitting this line on stdout or stderr, or
 CODEHELM_ACCEPTANCE	<exact planned criterion>	passed
 ```
 
-`failed` records the criterion as not verified. A line left in that file before the test process starts is ignored. Pytest's default capture hides `print`, so a wrapper that runs `pytest -s`, or the report file, is what the single-executable `--test-cmd` can use. `quality-attest` still records an operator attestation. When this attempt already has planned criteria, the attested text must be one of them. Without a stored plan, the attestation is still recorded. A criterion with neither is unverified. A failed report line cancels a passed report line for that criterion. It does not cancel an operator attestation.
+`failed` records the criterion as not verified. A line left in that file before the test process starts is ignored. Pytest's default capture hides `print`, so a wrapper that runs `pytest -s`, or the report file, is what the single-executable `--test-cmd` can use. `quality-attest` still records an operator attestation. When this attempt already has planned criteria, the attested text must be one of them. Without a stored plan, the attestation is still recorded. A criterion with neither is unverified. Inside one test process, a failed `CODEHELM_ACCEPTANCE` line cancels a passed line for that criterion before a row is stored. It does not cancel an operator attestation. Across rows on this attempt, the latest `test_report` for each criterion is the one that counts: an earlier failure does not cancel a later pass, and a later failure does cancel an earlier pass. A passing `quality-attest` row still verifies that criterion. A line from a test command that does not exit 0 is stored with `passed` false.
 
 Path globs classify `migrations/**`, `auth/**`, `security/**`, `deploy/**`,
 `infra/**`, and `.github/workflows/**` (including nested forms) as high risk.
@@ -956,9 +976,13 @@ existed is not grandfathered; re-run the post-documentation gates or
 `quality-eval --execute`. `schedule-complete` also requires that latest outcome, a recorded pull
 request, `--confirmed-merged`, and a `MERGED` result from `gh pr view`.
 Evidence is stored per attempt. `schedule-quality`
-still refuses an interrupted claim. `schedule-durable` can resume that claim
-on the same attempt after the coding agent has finished. `schedule-retry`
-starts a new attempt, and the previous attempt's rows do not count.
+still refuses an interrupted claim. It can re-score a `blocked` story from
+the rows already stored; it does not re-run the gates. `schedule-durable`
+can resume an interrupted claim on the same attempt after the coding agent
+has finished. `codehelm resume --execute` does that for `interrupted` or
+`blocked` and re-runs each visit that does not already have a passing row.
+`schedule-retry` starts a new attempt, and the previous attempt's rows do
+not count.
 
 ```bash
 codehelm validate PLAN-S1-A1 --reviewer codex --test-cmd pytest --security-cmd bandit --execute
@@ -972,12 +996,18 @@ codehelm quality-eval PLAN-S1-A1 --execute
 codehelm quality-debt PLAN-S1-A1 --finding "the finding text" --reason "why this finding can wait" --execute
 ```
 
-`schedule-durable --execute` runs the gate commands and model reviews once per
-attempt while the claim is held. It does not repeat a stage that already
-passed for that attempt. `schedule-quality` does not re-run pytest, bandit,
-or the reviewer. It only reads evidence those commands already recorded.
-Missing evidence blocks the story. Re-scoring after `quality-attest`,
-`quality-approve`, or `quality-debt` does not spend another reviewer call.
+`schedule-durable --execute` and `codehelm resume --execute` run the quality
+wave while the claim is held. A stage is skipped when the latest row for that
+gate in the current visit passed. A later failure runs again. When
+documentation is required, each required test, security, and review gate runs
+again after the docs evidence. A pass from before that evidence does not
+satisfy the second visit, and neither does the row the first visit just
+recorded. A new failing stage is scored immediately and later stages do
+not run.
+`schedule-quality` does not re-run pytest, bandit, or the reviewer. It scores
+the latest stored row for each gate. Missing evidence blocks the story.
+Re-scoring after `quality-attest`, `quality-approve`, or `quality-debt` does
+not spend another reviewer call.
 
 `quality-approve --execute` asks `gh api user` for the current login and
 records that login only when `--approver` matches it exactly. The task must

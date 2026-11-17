@@ -681,9 +681,10 @@ def resume(
         600, min=1, max=7200, help="Coding and documentation agent timeout in seconds"),
     gate_timeout: int = typer.Option(
         300, min=1, max=7200, help="Gate and review timeout in seconds"),
-    execute: bool = typer.Option(False, help="Re-claim the interrupted story and carry the same attempt"),
+    execute: bool = typer.Option(
+        False, help="Re-claim an interrupted or blocked story and carry the same attempt"),
 ) -> None:
-    """Continue one interrupted story on the same attempt. Does not relaunch a coding agent."""
+    """Continue one interrupted or blocked story on the same attempt. Does not relaunch a coding agent."""
     try:
         parsed_prefix, story_id, attempt = parse_resume_task_id(task_id)
         if not execute:
@@ -699,13 +700,14 @@ def resume(
         task = scheduler.store.get(task_id)
         if task is None:
             raise ValueError(f"Unknown task: {task_id}")
-        if task.status in {"queued", "running", "failed"}:
+        if task.status in {"queued", "running", "failed", "pr_created"}:
             raise ValueError(f"Coding agent will not be relaunched for {task_id}")
         snapshot = scheduler.snapshot()
-        if story_id not in snapshot or snapshot[story_id][0] != "interrupted":
+        state, attempts = snapshot.get(story_id, ("", None))
+        if state not in {"interrupted", "blocked"}:
             raise ValueError(
                 f"Story {story_id} is not interrupted. schedule-retry starts a new attempt")
-        if snapshot[story_id][1] != attempt:
+        if attempts != attempt:
             raise ValueError("Task id does not match the interrupted attempt")
         policy = load_policy(STATE_DIR / "quality.yaml")
         provider = task.provider or ""
