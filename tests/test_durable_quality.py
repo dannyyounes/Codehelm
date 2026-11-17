@@ -622,3 +622,20 @@ def test_schedule_quality_does_not_rerun_checks(tmp_path, monkeypatch):
     assert "blocked" in result.output
     assert gates.call_count == 0
     assert reviewer.return_value.execute.call_count == 0
+
+
+def test_carry_story_sends_plan_story_to_reviewer(tmp_path):
+    repo = make_repo(tmp_path / "repo")
+    database = tmp_path / "state.db"
+    write_policy(database, "require_acceptance_criteria: false\n")
+    raw = json.dumps({"epic_title": "Feature", "epic_description": "Build it", "stories": [{
+        "id": "S1", "title": "Bound the reviewer",
+        "description": "Pass the story.\n\nNARROWED SCOPE\nhonest local workspace",
+        "acceptance_criteria": ["Context is in the prompt"], "dependencies": []}]})
+    scheduler, engine = scheduler_for(database, raw), LifecycleEngine(repo, database)
+    assert admit(scheduler) == ["S1"]
+    status, _coder, reviewer, _docs = carry(scheduler, engine)
+    prompts = [call.args[0] for call in reviewer.return_value.execute.call_args_list]
+    assert status == "ready_for_pr" and any("Review the architecture" in prompt for prompt in prompts)
+    assert prompts and all("Bound the reviewer" in p and "NARROWED SCOPE" in p
+                           and "Context is in the prompt" in p for p in prompts)

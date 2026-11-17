@@ -214,6 +214,56 @@ milestone; see v0.6–v0.9. The v1.7 quality contract, when its policy file
 exists, can later replace `awaiting_pr` with `blocked`,
 `awaiting_human_approval`, or `ready_for_pr`.
 
+**Reviewer story context.** A task id shaped `PREFIX-STORY-An`
+(example `PLAN-S1-A1`) makes `validate --execute` and
+`validate-after-docs --execute` read `.codehelm/plan.json` in the working
+directory and prepend the matching story to the reviewer prompt. The id is
+three segments: a prefix and a story id, each letters, digits, or
+underscores, then `A` and an attempt number that does not start with `0`.
+The middle segment must equal a story `id` in that file (`S1`, `S2`, ...).
+`DEV-123` does not match, so the commands above keep the original prompt.
+A dry run returns before opening the plan. A missing file, a plan that
+`load_plan` rejects, or an unknown story id also keeps the original prompt.
+That lookup failure leaves the command on the same path as a task with no plan.
+
+The prepended block is the heading `Story`, the title, the whole
+description, a blank line, the heading `Acceptance criteria`, and one
+`- ` line per criterion. Text about scope or a threat model is included
+when it is written in those fields. Headings inside the description are
+ordinary description text. There is no plan field and no CLI flag for a
+separate scope section. The heading `Declared scope and threat model`
+appears only when Python code passes `scope_text` to `independent_review`.
+The CLI and the durable wave do not pass that argument.
+
+A block longer than 12000 characters is cut at that length. The cut can
+split a line and can drop criteria that fall past it. This instruction,
+then the original review prompt, follow the cut in full:
+
+```text
+Judge the change against the story and acceptance criteria. Report real defects: correctness, regressions, security issues within the declared scope, and missing tests for the criteria. Do not request hardening for cases the story declares out of scope. If remaining concerns are only out-of-scope or optional improvements, list them as notes and still return APPROVED.
+```
+
+Approval is still the reviewer's last line exactly `APPROVED`, a different
+provider from the author, and an unchanged Git snapshot. CodeHelm does not
+classify findings as in or out of scope. With none of the story fields set,
+the prompt is the original code or architecture prompt. `validate` uses the
+code prompt. `validate-after-docs` uses the code prompt and, when the
+quality policy runs architecture review, the architecture prompt.
+When a quality policy file is present, `schedule-durable` and `resume`
+pass the claimed story's title, description, and acceptance criteria from
+`--plan-file` (default `.codehelm/plan.json`) into every code review and
+architecture review in that wave. `schedule-quality` does not call the
+reviewer.
+
+```bash
+pytest tests/test_quality.py::test_review_prompt_unchanged_without_story_context \
+  tests/test_quality.py::test_review_prompt_includes_story_context \
+  tests/test_quality.py::test_story_context_is_truncated \
+  tests/test_quality.py::test_validate_passes_story_context \
+  tests/test_quality.py::test_validate_cli_passes_plan_story \
+  tests/test_durable_quality.py::test_carry_story_sends_plan_story_to_reviewer
+```
+
 **Security limitation:** This prototype invokes user-selected executables and
 AI CLIs directly. The default gate sandbox is a namespace, not a container
 image. An optional container runner for gate commands is off by default and
@@ -262,6 +312,9 @@ codehelm validate-after-docs DEV-123 --reviewer codex --test-cmd pytest --securi
 ```
 
 `--timeout` (default 300, range 1..7200) is the per-command limit for the post-documentation test, security, and independent-review steps. It applies only with `--execute`. Out-of-range values are rejected by the CLI.
+This command uses the same `.codehelm/plan.json` story lookup as `validate`.
+The story is sent to the code review and, when the policy runs it, to the
+architecture review.
 Successful gates transition to `awaiting_pr`, **not** `completed`, when no
 quality policy file is present. A failure blocks the task or requests changes.
 CLI commands currently accept executable names without arguments. GitHub PR
@@ -649,7 +702,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | --- | --- | --- |
 | Tests and security | Exit code from `command_gate` | A real process result |
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
-| Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged) | A model verdict recorded by CodeHelm, not human approval |
+| Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged). A matching story is prepended to that prompt; see Quality gates for the task-id shape and the 12000-character cut | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A real workspace check, or a human exception on this attempt. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `resolve_diff_base` then `collect_diff` (`merge-base..<HEAD` numstat plus working-tree/untracked), policy globs, and `risk_patterns` | Repository state. Optional `base_branch` is preferred before the main/master fallbacks; lookups use only `refs/heads/<name>` and `refs/remotes/origin/<name>` (order: policy base, `origin/<base>`, `main`, `master`, `origin/main`, `origin/master`). When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
 | Acceptance criteria | `quality-attest`, or a `CODEHELM_ACCEPTANCE` line from the test process | A passing exit code alone verifies nothing |
@@ -683,6 +736,11 @@ optional `architecture_cmd` runs first and must also exit 0. `schedule-durable`
 and `validate-after-docs` both run that command before the model review. A
 failing command does not launch the model review. The command does not
 replace the review. Turning architecture review off skips the command.
+The code review and this architecture review receive the story context
+described under Quality gates. `schedule-durable` and `resume` take the
+title, description, and acceptance criteria from the plan loaded with
+`--plan-file`. `validate` and `validate-after-docs` take them from
+`.codehelm/plan.json` when the task id is `PREFIX-STORY-An`.
 
 When the policy file exists, `validate-after-docs` and `schedule-quality --execute`
 persist one of three outcomes and use it as the task or dispatch state:

@@ -106,6 +106,21 @@ def run(
         raise typer.Exit(code=result.exit_code)
 
 
+def _story_review_kwargs(task_id: str) -> dict:
+    path = STATE_DIR / "plan.json"
+    if not path.is_file():
+        return {}
+    try:
+        story_id = parse_resume_task_id(task_id)[1]
+        story = next((item for item in load_plan(path).stories if item.id == story_id), None)
+    except (ValueError, PlanningError, OSError):
+        return {}
+    if story is None:
+        return {}
+    return {"story_title": story.title, "story_description": story.description,
+            "acceptance_criteria": list(story.acceptance_criteria)}
+
+
 @app.command("validate")
 def validate(
     task_id: str,
@@ -122,7 +137,9 @@ def validate(
         return
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
-        passed = engine.validate(task_id, [test_cmd], [security_cmd], reviewer, timeout)
+        passed = engine.validate(
+            task_id, [test_cmd], [security_cmd], reviewer, timeout,
+            **_story_review_kwargs(task_id))
     except (ValueError, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -173,7 +190,8 @@ def validate_after_docs(
     try:
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         passed = engine.validate_after_docs(
-            task_id, [test_cmd], [security_cmd], reviewer, timeout)
+            task_id, [test_cmd], [security_cmd], reviewer, timeout,
+            **_story_review_kwargs(task_id))
     except (ValueError, WorktreeError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
