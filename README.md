@@ -17,7 +17,7 @@ Implemented in this repository:
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 - DesignFlow screen and form mockups, inline comments, and an explicit agent revision loop
 
-There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. `pr-create` opens a draft pull request unless `--ready` is passed or `pr_ready` is true; `--draft` forces a draft. That command does not merge. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. Optional `prepare_cmd` runs on the host in the new worktree before the coding agent, with the operator's environment and network. Failure marks the task `failed` and does not start the agent. The quality contract does not score that result, and `agent-run` does not run the command. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. `pr-create` opens a draft pull request unless `--ready` is passed or `pr_ready` is true; `--draft` forces a draft. That command does not merge. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. Each namespace gate stages its bind mounts in a new directory under `/dev/shm`, so concurrent gates do not share a stage path when the sandbox process is pid 1. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. Optional `prepare_cmd` runs on the host in the new worktree before the coding agent, with the operator's environment and network. Failure marks the task `failed` and does not start the agent. The quality contract does not score that result, and `agent-run` does not run the command. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -270,7 +270,8 @@ pytest tests/test_quality.py::test_review_prompt_unchanged_without_story_context
 
 **Security limitation:** This prototype invokes user-selected executables and
 AI CLIs directly. The default gate sandbox is a namespace, not a container
-image. An optional container runner for gate commands is off by default and
+image. Concurrent namespace gates each use a new stage directory under
+`/dev/shm`. An optional container runner for gate commands is off by default and
 fails closed when selected but unavailable. It can name the published GHCR
 image, and it still does not pull that image. It does not run the coding agent
 or the model reviewer. Run only on trusted code with appropriate permissions.
@@ -1016,13 +1017,36 @@ makes no new edit, and the resolved-base change already includes one.
 Test and security commands run through `unshare` with a private user, mount,
 pid, and network namespace. `/tmp`, `/home`, and `/root` are covered. The
 workspace is bind-mounted back, and credential environment variables are
-dropped. If `unshare` is missing or the namespace cannot be created, the gate
-fails and the command does not run outside the sandbox. Hosts that block
-unprivileged user namespaces, including a default GitHub-hosted runner,
-must allow them first. The coding agent and the model reviewer are not in
-that namespace. `prepare_cmd` runs outside that sandbox: no shell, the
+dropped. `architecture_cmd` uses this runner when `gate_runner` is
+`namespace`. Each bind is staged in a new directory under `/dev/shm`: prefix
+`codehelm-ws-` for the workspace, and `codehelm-keep0-`, `codehelm-keep1-`,
+and so on for an interpreter directory that would otherwise be covered. The
+directory name does not include the process id. `unshare --pid --fork` runs
+the sandbox process as pid 1, so concurrent namespace gates do not share one
+stage path. CodeHelm
+unmounts and removes those directories before the gate command replaces the
+process. If that unmount fails, the directory can remain under `/dev/shm`.
+`gate_runner: container` does not create them. If `unshare` is missing or the
+namespace cannot be created, the gate fails and the command does not run
+outside the sandbox. Hosts that block unprivileged user namespaces, including
+a default GitHub-hosted runner, must allow them first. The coding agent and
+the model reviewer are not in that namespace. `prepare_cmd` runs outside that
+sandbox: no shell, the
 operator's environment including credential variables, network access, and a
 fixed 900 second timeout. This is not a container image.
+
+Verify the stage directories without starting a gate:
+
+```bash
+pytest tests/test_gate_sandbox.py::test_stage_directories_are_unique_for_the_same_name_and_pid
+```
+
+The test sets `os.getpid` to 1, calls `_stage("ws")` twice, and requires two
+different directories whose parent is `/dev/shm`. It then removes them. It
+does not run `unshare`. `/dev/shm` must be writable. The rest of
+`tests/test_gate_sandbox.py` covers workspace writes, hidden files outside the
+workspace, dropped credential variables, blocked network, and a missing
+`unshare`.
 
 An optional container runner is off by default. Set `gate_runner: container`
 and `gate_image` to an image already present in the local `podman` store, or

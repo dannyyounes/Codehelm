@@ -3,6 +3,7 @@ import shutil
 from unittest.mock import patch
 
 from codehelm.quality.gates import command_gate
+from codehelm.quality.sandbox import _stage
 
 
 def test_command_can_write_its_workspace_and_keeps_its_exit_code(tmp_path):
@@ -38,6 +39,19 @@ def test_sandbox_drops_credential_env_and_blocks_network(tmp_path, monkeypatch):
         "s.connect(('1.1.1.1', 80))",
     ])
     assert not offline.passed
+
+
+def test_stage_directories_are_unique_for_the_same_name_and_pid(monkeypatch):
+    monkeypatch.setattr("codehelm.quality.sandbox.os.getpid", lambda: 1)
+    created = []
+    try:
+        created.append(_stage("ws"))
+        created.append(_stage("ws"))
+        assert len({created[0], created[1]}) == 2
+        assert all(path.is_dir() and path.parent.as_posix() == "/dev/shm" for path in created)
+    finally:
+        for path in created:
+            path.rmdir()
 
 
 def test_missing_unshare_does_not_run_the_command(tmp_path):

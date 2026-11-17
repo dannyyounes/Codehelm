@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 _COVERED = (Path("/tmp"), Path("/home"), Path("/root"))
 
@@ -95,9 +96,7 @@ def _keep_dirs(command: list[str], workspace: Path) -> list[Path]:
 
 
 def _stage(name: str) -> Path:
-    path = Path("/dev/shm") / f"codehelm-{os.getpid()}-{name}"
-    path.mkdir(exist_ok=True)
-    return path
+    return Path(tempfile.mkdtemp(prefix=f"codehelm-{name}-", dir="/dev/shm"))
 
 
 def main(argv: list[str] | None = None) -> None:
