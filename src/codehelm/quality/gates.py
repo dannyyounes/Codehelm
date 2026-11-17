@@ -98,6 +98,30 @@ def _container_gate(workspace: Path, command: list[str], timeout: int, image: st
     return _run_argv(argv, workspace, timeout)
 
 
+# Host install step before the coding agent. Not a gate-sandbox timeout.
+PREPARE_TIMEOUT = 900
+
+
+def host_command(workspace: Path, command: list[str], timeout: int = PREPARE_TIMEOUT) -> GateResult:
+    """Run argv on the host with the operator's environment and network.
+
+    No shell and no sandbox. Credential variables are kept on purpose: the
+    operator configured this command in their own quality.yaml.
+    """
+    if not command or any(not isinstance(part, str) or part == "" or "\x00" in part for part in command):
+        return GateResult(False, "Command arguments must be nonempty strings without NULs")
+    if not Path(workspace).is_dir():
+        return GateResult(False, "Workspace missing")
+    try:
+        result = subprocess.run(
+            list(command), cwd=workspace, capture_output=True, text=True,
+            timeout=timeout, check=False, shell=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return GateResult(False, str(exc))
+    return GateResult(
+        result.returncode == 0, (result.stdout + "\n" + result.stderr)[-4000:], result.returncode)
+
+
 def command_gate(workspace: Path, command: list[str], timeout: int = 300, *,
                  runner: str = "namespace", image: str = "") -> GateResult:
     """Run an argv command in the selected sandbox. No shell, and no unsandboxed fallback."""

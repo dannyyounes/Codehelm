@@ -390,6 +390,8 @@ class DurableScheduler:
         """Advance one claimed story. Quality gates run only when a policy file exists.
 
         The coding agent is started only when this attempt has no task row yet.
+        That start is LifecycleEngine.execute, which runs prepare_cmd on the host
+        first when the policy sets it. A failing prepare does not start the agent.
         Gate commands and model reviews that already passed for the attempt are
         not repeated. A green test exit code does not verify acceptance criteria.
         Only a CODEHELM_ACCEPTANCE line from that test process does.
