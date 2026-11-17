@@ -306,7 +306,7 @@ def budget_approve(
 @app.command("usage-import")
 def usage_import(
     task_id: str,
-    provider: str = typer.Option(..., help="claude, codex, or gemini"),
+    provider: str = typer.Option(..., help="claude, codex, gemini, or cursor"),
     usage_file: Path = typer.Option(..., help="Verified structured provider usage JSON"),
     prefix: str = typer.Option("PLAN"),
     execute: bool = typer.Option(False, help="Record verified token and USD usage"),
@@ -935,7 +935,7 @@ def providers() -> None:
 
 @app.command("agent-run")
 def agent_run(
-    provider: str = typer.Option(..., help="claude, codex, or gemini"),
+    provider: str = typer.Option(..., help="claude, codex, gemini, or cursor"),
     prompt: str = typer.Option(..., help="Task instruction"),
     workspace: Path = typer.Option(..., help="Existing workspace directory"),
     timeout: int = typer.Option(600, min=1, max=3600),

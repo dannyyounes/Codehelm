@@ -43,6 +43,8 @@ class CLIProvider:
         "claude": ("claude", "-p"),
         "codex": ("codex", "exec"),
         "gemini": ("gemini", "-p"),
+        # Cursor Agent CLI. Auth comes from CURSOR_API_KEY or `cursor-agent login`.
+        "cursor": ("cursor-agent", "-p", "--trust", "--output-format", "text"),
     }
 
     def __init__(self, name: str):
@@ -62,6 +64,9 @@ class CLIProvider:
         if not self.available():
             raise ProviderError(f"{self.name} CLI not found in PATH")
         executable, *args = self.COMMANDS[self.name]
+        if self.name == "cursor":
+            # "--" stops a prompt that starts with "-" being parsed as an option.
+            args = [*args, "--model", cursor_model(), "--"]
         try:
             proc = subprocess.run(
                 [executable, *args, prompt],
@@ -77,6 +82,14 @@ class CLIProvider:
 
 def provider_names() -> tuple[str, ...]:
     return tuple(CLIProvider.COMMANDS)
+
+
+def cursor_model() -> str:
+    """Model for the cursor provider: CODEHELM_CURSOR_MODEL, default ``auto``."""
+    model = os.environ.get("CODEHELM_CURSOR_MODEL", "").strip() or "auto"
+    if model.startswith("-") or any(char.isspace() for char in model):
+        raise ProviderError("Invalid CODEHELM_CURSOR_MODEL")
+    return model
 
 
 @dataclass(frozen=True)
@@ -101,6 +114,9 @@ def execute_metered(provider: str, prompt: str, cwd: Path,
         "codex": ["codex", "exec", "--json", prompt],
         "gemini": ["gemini", "-p", prompt, "--output-format", "json"],
     }
+    if provider == "cursor":
+        commands["cursor"] = ["cursor-agent", "-p", "--trust", "--output-format", "json",
+                              "--model", cursor_model(), "--", prompt]
     try:
         proc = subprocess.run(commands[provider], cwd=cwd, capture_output=True,
                               text=True, timeout=timeout, check=False, shell=False)

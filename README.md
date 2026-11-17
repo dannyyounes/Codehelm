@@ -9,7 +9,7 @@
 Implemented in this repository:
 
 - Local configuration, SQLite task state, and Git worktree isolation
-- Claude Code, Codex, and Gemini CLI adapters
+- Claude Code, Codex, Gemini, and Cursor Agent CLI adapters
 - Opt-in HTTP transport for those same three providers, off unless `--transport http` is set
 - Single-task lifecycle, dependency-aware dispatch, and a durable SQLite scheduler with bounded attempts, leases, and explicit retry
 - Estimated token/USD reservations and an additional-AUD admission budget
@@ -125,7 +125,9 @@ Run an installed coding CLI in an existing worktree:
 codehelm agent-run --provider claude --workspace ../codehelm-worktrees/DEV-123 --prompt "Fix the failing tests" --execute
 ```
 
-Supported initial CLI names: `claude`, `codex`, `gemini`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
+Supported initial CLI names: `claude`, `codex`, `gemini`, `cursor`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
+
+The `cursor` provider runs `cursor-agent -p --trust --output-format text --model <model> -- "<prompt>"` in the story worktree. The model comes from `CODEHELM_CURSOR_MODEL` and defaults to `auto`. Authentication is the Cursor CLI's own: `CURSOR_API_KEY` in the environment or `cursor-agent login`. CodeHelm does not read or pass the key. In print mode Cursor Agent can write files; shell commands follow its normal permission policy because CodeHelm does not pass `--force`. `cursor` is a distinct provider name, so `--provider cursor --reviewer codex` satisfies the different-reviewer rule and `cursor` reviewing `cursor` is refused. Structured usage is read from `--output-format json` token counts, with cache read and write tokens added to input; USD stays unknown. There is no HTTP transport for `cursor`.
 
 **Not in this milestone:** direct API implementations, task scheduling, token accounting, structured agent output, automatic Jira operations, and security sandboxing. Scheduling, Jira REST, and estimated budgets were added later. An opt-in HTTP transport for the same three providers was added later and is off by default. The CLI adapters remain the default.
 

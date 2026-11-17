@@ -31,3 +31,15 @@ def test_gemini_stats_envelope():
 
 def test_invalid_output_keeps_usage_unknown():
     assert parse_cli_usage("codex", "Agent completed successfully") is None
+
+
+def test_cursor_result_envelope():
+    payload = {"type": "result", "result": "OK", "usage": {
+        "inputTokens": 6779, "outputTokens": 26, "cacheReadTokens": 3968}}
+    usage = parse_cli_usage("cursor", json.dumps(payload))
+    assert usage.input_tokens == 6779 + 3968 and usage.output_tokens == 26
+    assert usage.usd is None and usage.source == "cursor:structured-json"
+    assert parse_cli_usage("cursor", json.dumps({"type": "result", "usage": {}})) is None
+    bad_cache = {"type": "result", "usage": {
+        "inputTokens": 1, "outputTokens": 1, "cacheReadTokens": "3"}}
+    assert parse_cli_usage("cursor", json.dumps(bad_cache)) is None
