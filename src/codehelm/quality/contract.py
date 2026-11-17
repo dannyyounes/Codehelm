@@ -16,7 +16,9 @@ identity. Evaluation does not call GitHub again. A quality debt accepts one unre
 current attempt when its text matches. It does not waive tests, security,
 review, architecture, docs, acceptance, or human approval.
 An optional architecture command is a separate command_gate result and does not
-replace the model architecture review. When risk_patterns is omitted or null, a
+replace the model architecture review. An optional prepare_cmd is an argv list
+validated like architecture_cmd. It is not a contract gate: execute runs it on
+the host before the coding agent. When risk_patterns is omitted or null, a
 small built-in content scanner classifies changed files. A configured mapping
 replaces that set. An empty mapping turns content scanning off. A match is a
 heuristic risk finding, not proof of a secret or a migration. Path globs still
@@ -79,6 +81,7 @@ _POLICY_FIELDS = {
     "human_approval_risks",
     "risk_paths",
     "architecture_cmd",
+    "prepare_cmd",
     "risk_patterns",
     "gate_runner",
     "gate_image",
@@ -163,6 +166,7 @@ class QualityPolicy:
     human_approval_risks: frozenset[str] = field(default_factory=lambda: frozenset(HIGH_RISK))
     risk_paths: tuple[tuple[str, tuple[str, ...]], ...] = _DEFAULT_RISK_PATHS
     architecture_cmd: tuple[str, ...] = ()
+    prepare_cmd: tuple[str, ...] = ()
     risk_patterns: tuple[tuple[str, tuple[str, ...]], ...] = ()
     gate_runner: str = "namespace"
     gate_image: str = ""
@@ -298,14 +302,17 @@ def _require_int(value, field_name: str, low: int, high: int) -> int:
     return value
 
 
-def _load_architecture_cmd(value) -> tuple[str, ...]:
-    """A present command is a nonempty argv. None is handled by the caller."""
+def _load_architecture_cmd(value, field_name: str = "architecture_cmd") -> tuple[str, ...]:
+    """A present command is a nonempty argv. None is handled by the caller.
+
+    prepare_cmd uses the same rules. Pass its name so the error names that key.
+    """
     if (
         not isinstance(value, list) or not value
         or not all(isinstance(item, str) and item and "\x00" not in item for item in value)
     ):
         raise ValueError(
-            "architecture_cmd must be a nonempty list of nonempty strings with no NUL characters")
+            f"{field_name} must be a nonempty list of nonempty strings with no NUL characters")
     return tuple(value)
 
 
@@ -439,6 +446,10 @@ def load_policy(path: Path) -> QualityPolicy:
         architecture_cmd = ()
     else:
         architecture_cmd = _load_architecture_cmd(data["architecture_cmd"])
+    if "prepare_cmd" not in data or data["prepare_cmd"] is None:
+        prepare_cmd = ()
+    else:
+        prepare_cmd = _load_architecture_cmd(data["prepare_cmd"], "prepare_cmd")
     if "risk_patterns" not in data or data["risk_patterns"] is None:
         risk_patterns = _compile_risk_patterns(_DEFAULT_RISK_PATTERNS)
     else:
@@ -476,6 +487,7 @@ def load_policy(path: Path) -> QualityPolicy:
         human_approval_risks=frozenset(item.strip() for item in risks),
         risk_paths=risk_paths,
         architecture_cmd=architecture_cmd,
+        prepare_cmd=prepare_cmd,
         risk_patterns=risk_patterns,
         gate_runner=gate_runner,
         gate_image=gate_image,

@@ -14,7 +14,11 @@ quality-debt accepts one unresolved finding for the current attempt and does
 not waive the other gates. A docs exception recorded by docs-exception stores
 the GitHub login and a nonempty reason. It satisfies documentation for this
 attempt and does not waive the other gates. The documentation agent cannot
-record that exception.
+record that exception. When quality.yaml sets prepare_cmd, execute runs that
+argv on the host in the new worktree before the coding agent. The command
+inherits the operator's environment and network; it is not the gate sandbox.
+Failure is evidence gate prepare (source command_gate), the task is failed,
+and the agent does not start. An omitted key leaves execution unchanged.
 """
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,7 +30,9 @@ from codehelm.execution.worktrees import WorktreeManager
 from codehelm.orchestrator.budgets import BudgetLedger
 from codehelm.providers.adapters import CLIProvider, HTTPProvider, AgentResult, ProviderError
 from codehelm.providers.usage import Usage, parse_cli_usage
-from codehelm.quality.gates import GateResult, command_gate, independent_review
+from codehelm.quality.gates import (
+    PREPARE_TIMEOUT, GateResult, command_gate, host_command, independent_review,
+)
 from codehelm.quality.contract import (
     assess, decision_error, load_policy, parse_acceptance_report, policy_path_for,
     read_acceptance_report, task_attempt,
@@ -40,6 +46,7 @@ _EVIDENCE_SOURCES = {
     "tests": {"command_gate"},
     "security": {"command_gate"},
     "architecture_check": {"command_gate"},
+    "prepare": {"command_gate"},
     "review": {"independent_review"},
     "architecture": {"independent_review"},
     "docs": {"documentation_agent", "human"},
@@ -251,7 +258,7 @@ class TaskStore:
             raise ValueError("Quality debt requires a passing finding and a reason")
         if gate == "docs" and source == "human" and (passed is not True or not detail or not identity):
             raise ValueError("Documentation exception requires a passing nonempty reason and identity")
-        if gate in {"tests", "security", "architecture_check"} and passed and exit_code != 0:
+        if gate in {"tests", "security", "architecture_check", "prepare"} and passed and exit_code != 0:
             raise ValueError(f"{gate} pass requires exit code 0")
         timestamp = now()
         with sqlite3.connect(self.database) as db:
@@ -474,6 +481,24 @@ class LifecycleEngine:
         except ValueError:
             return
 
+    def _prepare_workspace(self, task_id: str, provider: str, workspace: Path) -> AgentResult | None:
+        """Run prepare_cmd on the host. None means the coding agent may start."""
+        command = tuple(self._policy().prepare_cmd)
+        if not command:
+            return None
+        attempt = self._attempt_of(task_id, None)
+        result = host_command(workspace, list(command), PREPARE_TIMEOUT)
+        self._record_gate(
+            task_id, attempt, "prepare", "command_gate",
+            GateResult(result.passed, f"argv={list(command)!r}\n{result.detail}", result.exit_code))
+        if result.passed:
+            return None
+        code = result.exit_code if result.exit_code else 1
+        message = f"prepare: {result.detail}"[:2000]
+        self.store.transition(
+            task_id, "failed", workspace=str(workspace), exit_code=code, error=message)
+        return AgentResult(provider, code, "", message)
+
     def execute(self, task_id: str, prompt: str, provider: str,
                 timeout: int = 600, transport: str = "cli") -> AgentResult:
         if self.store.get(task_id):
@@ -489,6 +514,10 @@ class LifecycleEngine:
         self.store.transition(task_id, "queued", provider=provider)
         try:
             workspace = self.worktrees.create(task_id)
+            # Base checkout only. prepare_cmd is the operator's host command.
+            failed = self._prepare_workspace(task_id, provider, workspace.path)
+            if failed is not None:
+                return failed
             self.store.transition(task_id, "running", workspace=str(workspace.path))
             result = adapter.execute(prompt, workspace.path, timeout)
             self._record_recognized_usage(

@@ -17,7 +17,7 @@ Implemented in this repository:
 - An optional quality contract, active only when `.codehelm/quality.yaml` exists
 - DesignFlow screen and form mockups, inline comments, and an explicit agent revision loop
 
-There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. `pr-create` opens a draft pull request unless `--ready` is passed or `pr_ready` is true; `--draft` forces a draft. That command does not merge. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
+There is no default exchange rate. `--fetch-aud-rate` reads AUD per USD from frankfurter.app only when set, stores that source and the rate date, and fails closed when the fetch fails or the date is more than five days old. It converts `--additional-usd` unless `--convert-reserve-usd` is also set, in which case it converts `--reserve-usd` and refuses `--additional-usd`. `--convert-reserve-usd` is off by default. `plan-publish --execute` writes each returned story key into the plan. A dry run does not write one, and a plan that already has `jira_key` is refused. HTTP is opt-in and off by default. It requires `CODEHELM_CLAUDE_API_URL`, `CODEHELM_CLAUDE_API_TOKEN`, and `CODEHELM_CLAUDE_MODEL`, or the matching `CODEHELM_CODEX_*` or `CODEHELM_GEMINI_*` variables, and it reads them only when HTTP is selected. The CLI adapters remain the default. HTTP is not a spending cap and does not cover every provider feature. Structured CLI stdout is recorded when `parse_cli_usage` recognizes it; otherwise the reservation stays an estimate. Unknown USD is not stored as zero. An explicit `jira-transition` command posts one transition id; a dry run does not call Jira. The scheduler posts a Jira transition only when `jira_transitions` maps the new state and the story has a `jira_key`. That is off by default, and it stays a dry run unless `jira_transition_execute` is true. A failed post is stored on the task and reported. `schedule-durable` merges a recorded pull request only when `auto_merge` is true, using the same checks as `merge-ready`. That is off by default. The plain `schedule` command does not merge. `merge-ready` merges one recorded pull request only when every gate has passed, required human approval is on that decision, and every GitHub check is success. A dry run does not call GitHub, and a merge does not complete the story. `pr-create` opens a draft pull request unless `--ready` is passed or `pr_ready` is true; `--draft` forces a draft. That command does not merge. Each `quality-debt` row accepts one unresolved finding for the current attempt. It does not waive tests, security, review, architecture, docs, acceptance, or human approval. A debt from another attempt does not count, and a debt whose text does not match a finding is ignored. Test and security commands run in a Linux namespace sandbox. An optional container runner for those commands is off by default and fails closed when selected but unavailable. The gate does not pull an image. A workflow publishes `ghcr.io/dannyyounes/codehelm` on pushes to `main` and on version tags. Pin `gate_image` to the digest that workflow prints. CodeHelm does not fetch that digest and does not fall back to the host. Optional `prepare_cmd` runs on the host in the new worktree before the coding agent, with the operator's environment and network. Failure marks the task `failed` and does not start the agent. The quality contract does not score that result, and `agent-run` does not run the command. When `risk_patterns` is omitted, a small built-in content scanner runs. A configured mapping replaces it, and `{}` turns content scanning off. High-risk approval stores the GitHub login and a sha256 digest of the working tree against the resolved merge-base. That digest is a length-prefixed cached binary diff of a temporary index after `git add -A`, so committed changes and untracked files are included and the real index is not modified. Committing that same content leaves the digest unchanged. A content edit makes that approval not count. A dirty submodule, an untracked nested Git repository, or a missing merge-base yields an empty digest, and approval is refused. When no base resolves, the digest is only the uncommitted diff against HEAD plus untracked files, and committing that work changes it. With `approval_signature` off, that row is not a cryptographic signature. `approval_signature: required` demands an SSH or GPG signature over the digest, checked again when the story is scored. A successful agent exit does not complete a story. Budgets remain admission estimates, not guaranteed spending protection and not a provider-side cap.
 
 Sections headed `v0.x` / `v1.x` are milestone notes. If an earlier note says a capability is absent, this summary and any later milestone supersede that sentence.
 
@@ -140,7 +140,7 @@ Run an installed coding CLI in an existing worktree:
 codehelm agent-run --provider claude --workspace ../codehelm-worktrees/DEV-123 --prompt "Fix the failing tests" --execute
 ```
 
-Supported initial CLI names: `claude`, `codex`, `gemini`, `cursor`. CodeHelm uses existing CLI authentication and permission policies. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
+Supported initial CLI names: `claude`, `codex`, `gemini`, `cursor`. CodeHelm uses existing CLI authentication and permission policies. `agent-run` does not read `prepare_cmd` and does not create a task worktree. Without `--execute`, it only prints a dry-run message. CLI command syntax can vary by installed version; test compatibility before relying on a provider. Agent processes can modify files or incur usage charges. Run only in trusted or sandboxed workspaces.
 
 The `cursor` provider runs `cursor-agent -p --trust --output-format text --model <model> -- "<prompt>"` in the story worktree. The model comes from `CODEHELM_CURSOR_MODEL` and defaults to `auto`. Authentication is the Cursor CLI's own: `CURSOR_API_KEY` in the environment or `cursor-agent login`. CodeHelm does not read or pass the key. In print mode Cursor Agent can write files; shell commands follow its normal permission policy because CodeHelm does not pass `--force`. `cursor` is a distinct provider name, so `--provider cursor --reviewer codex` satisfies the different-reviewer rule and `cursor` reviewing `cursor` is refused. Structured usage is read from `--output-format json` token counts, with cache read and write tokens added to input; USD stays unknown. There is no HTTP transport for `cursor`.
 
@@ -201,7 +201,11 @@ codehelm validate DEV-123 --reviewer codex --test-cmd pytest --security-cmd band
 
 **Important:** `--test-cmd` and `--security-cmd` each accept an executable name only
 (no arguments). Install/configure those commands in the agent worktree environment
-before running validation. For example, `bandit` without configured targets may
+before running validation. `prepare_cmd` in `.codehelm/quality.yaml` is the host
+argv that can install those dependencies in the new worktree before the coding
+agent. Files it writes remain in that worktree for later validation.
+See Quality contract (v1.7). `--test-cmd` and `--security-cmd` stay a
+single executable name. For example, `bandit` without configured targets may
 fail; this is intentional fail-closed behavior. A later version will support
 structured command arguments and per-project policies.
 
@@ -570,7 +574,7 @@ codehelm schedule-retry S1 --plan-file .codehelm/plan.json --prefix PLAN --execu
 codehelm schedule-complete S1 --plan-file .codehelm/plan.json --prefix PLAN --confirmed-merged --execute
 ```
 
-`schedule-durable` and `resume` accept `--agent-timeout` (default 600, range 1..7200) and `--gate-timeout` (default 300, range 1..7200). `--agent-timeout` bounds the coding agent and, when a quality policy continues the claim, the documentation agent. `--gate-timeout` bounds test/security commands and model reviews on that same path. `resume` still does not relaunch a queued, running, or failed coding agent; `--agent-timeout` then applies only if that attempt still runs the documentation agent. Dry runs do not start agents or gates. Out-of-range values are rejected by the CLI. `codehelm run` and `codehelm agent-run` keep their own `--timeout` (default 600, max 3600) and are unchanged by these flags.
+`schedule-durable` and `resume` accept `--agent-timeout` (default 600, range 1..7200) and `--gate-timeout` (default 300, range 1..7200). `--agent-timeout` bounds the coding agent and, when a quality policy continues the claim, the documentation agent. `--gate-timeout` bounds test/security commands and model reviews on that same path. `resume` still does not relaunch a queued, running, or failed coding agent; `--agent-timeout` then applies only if that attempt still runs the documentation agent. Dry runs do not start agents or gates. Out-of-range values are rejected by the CLI. `codehelm run` and `codehelm agent-run` keep their own `--timeout` (default 600, max 3600) and are unchanged by these flags. `prepare_cmd`, when set, uses a fixed 900 second host timeout on the `execute` path and ignores `--agent-timeout`, `--gate-timeout`, and `run --timeout`.
 SQLite records story dispatch states and attempts. Atomic claims prevent
 multiple scheduler processes from claiming the same story. Limits cap
 concurrent claims, per-story attempts, and total attempts. Each retry uses a
@@ -759,6 +763,72 @@ fails load with `pr_ready must be a boolean`. `--draft` forces a draft, and
 `--draft` wins when both flags are passed. Neither path merges or runs
 `gh pr ready`. Usage and checks are in the GitHub pull requests section;
 `pytest tests/test_github_pr.py` covers the policy and the CLI wiring.
+`prepare_cmd` is optional. Omitted, null, or an empty YAML key, the list is
+empty and execution does not run a prepare step. A present value uses the same validation as
+`architecture_cmd`: a nonempty list of nonempty strings with no NUL
+characters. An empty list, a bare string, an empty item, or a non-string
+fails policy load with an error that names `prepare_cmd`. The list is an
+argv. CodeHelm does not invoke a shell.
+
+With `--execute`, `run`, `schedule`, and `schedule-durable` start the coding
+agent through `LifecycleEngine.execute`. `--transport cli` and `--transport http`
+both do. When `prepare_cmd` is nonempty, `execute` runs that argv on the host
+after the worktree exists and before the provider call. `schedule-durable`
+does this only for an attempt that has no task row yet. The working directory
+is the new worktree, still the base checkout. The limit is 900 seconds. It
+does not use `--timeout`, `--agent-timeout`, or `--gate-timeout`. The process
+keeps the operator's environment, including credential variables, and can use
+the network, so a step such as `npm ci` or `composer install` can download
+dependencies. `gate_runner` does not apply. Gate commands still drop credential
+variables inside the namespace or container runner.
+
+Exit 0 records evidence gate `prepare` with source `command_gate`. The agent
+then starts in that same worktree and can read files the command wrote. A
+relative path the command writes stays in the worktree. The evidence detail
+stores the argv and the captured output, cut at 4000 characters. Prepare
+output stays on that row. A successful `run` prints the agent output when
+the agent produced output, then `Task <id>: awaiting_validation`. A nonzero
+exit, a timeout, or a failure to start the process records the same gate as
+failed, stores `failed` on the task, and leaves the status path `queued`
+then `failed`. The agent does not start. The task exit code is the process
+code, or 1 when the process has no exit code. The evidence row keeps a null
+exit code in that missing-code case. `run` prints the prepare error on
+stderr, cut at 2000 characters, then `Task <id>: failed`, and exits with
+that task code. `schedule` prints `<story> -> <task>: failed (<provider>)`
+and exits 1. `schedule-durable` prints `<story>: failed`, settles the story
+`failed`, and does not run the later quality gates. `assess` and `evaluate`
+do not read the row. A missing prepare row does not block `ready_for_pr`.
+
+A dry run does not create the worktree or run the command. `agent-run` and
+`worktree-create` do not call `execute`. `execute` refuses a task id that
+already has a row, so the same id does not run `prepare_cmd` again.
+`schedule-retry` allocates a new task id (`PREFIX-S1-A2`), and that id runs
+`prepare_cmd` again. `resume` leaves a failed task failed.
+
+```yaml
+schema_version: 1
+prepare_cmd:
+  - npm
+  - ci
+```
+
+```bash
+pytest tests/test_prepare_cmd.py
+```
+
+Operator check, from a Git repository with at least one commit:
+
+```bash
+codehelm run --jira DEV-123 --prompt "Fix the failing tests" --provider claude --execute
+codehelm task-status DEV-123
+```
+
+Success prints `Task DEV-123: awaiting_validation`. `task-status` shows that
+status and the worktree path. A relative path the command writes is in that
+worktree. A failing command prints the prepare error and `Task DEV-123: failed`.
+`task-status` shows `failed` and the same worktree. The coding agent has not
+edited it. Use a new task id to run the command again.
+
 `base_branch` is optional. Set it when the integration branch is not
 `main` or `master`:
 
@@ -831,6 +901,7 @@ and from `git`. An agent-written evidence JSON file is rejected.
 | --- | --- | --- |
 | Tests and security | Exit code from `command_gate` | A real process result |
 | Optional architecture command | Exit code from `command_gate` when architecture review is required and `architecture_cmd` is set | Architecture review is still a model verdict. The command must also exit 0 and does not replace it |
+| Optional prepare command | Exit code recorded as gate `prepare` with source `command_gate` when `prepare_cmd` is set | Host argv, cwd = the new worktree, after worktree creation and before the coding agent, timeout 900s. The operator's environment, including credential variables, and network are kept. Failure stores task status `failed` (`queued` then `failed`) and does not start the agent. `assess` does not read this row |
 | Independent review and architecture review | `independent_review` verdict (`APPROVED` on the last line, different provider, Git snapshot unchanged). A matching story is prepended to that prompt; see Quality gates for the task-id shape and the 12000-character cut | A model verdict recorded by CodeHelm, not human approval |
 | Documentation | Documentation-agent file check, an already-included documentation diff, or `docs-exception` (`source=human`, passed, GitHub login, nonempty reason) | A workspace check on this attempt. No new edit still passes when the resolved-base diff already includes a documentation path, with detail `Documentation already included in the change`. A row from another attempt does not count. It does not waive tests, security, review, acceptance, or human approval |
 | Diff size and risk paths | `resolve_diff_base` then `collect_diff` (`merge-base..<HEAD` numstat plus working-tree/untracked), policy globs, and `risk_patterns` | Repository state. Optional `base_branch` is preferred before the main/master fallbacks; lookups use only `refs/heads/<name>` and `refs/remotes/origin/<name>` (order: policy base, `origin/<base>`, `main`, `master`, `origin/main`, `origin/master`). When `risk_patterns` is omitted or null, a built-in scanner checks changed files. A configured mapping replaces it. `{}` turns content scanning off. It is a heuristic and does not detect every risky edit. Path globs still apply |
@@ -949,7 +1020,9 @@ dropped. If `unshare` is missing or the namespace cannot be created, the gate
 fails and the command does not run outside the sandbox. Hosts that block
 unprivileged user namespaces, including a default GitHub-hosted runner,
 must allow them first. The coding agent and the model reviewer are not in
-that namespace. This is not a container image.
+that namespace. `prepare_cmd` runs outside that sandbox: no shell, the
+operator's environment including credential variables, network access, and a
+fixed 900 second timeout. This is not a container image.
 
 An optional container runner is off by default. Set `gate_runner: container`
 and `gate_image` to an image already present in the local `podman` store, or
