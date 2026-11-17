@@ -6,8 +6,10 @@ When `.codehelm/quality.yaml` is present, the durable scheduler can run those
 gates itself. Recorded evidence then decides blocked, awaiting_human_approval
 or ready_for_pr before a pull request. Acceptance is a test-report line or an
 operator attestation. Human approval records the GitHub login and a sha256
-digest of the workspace diff. A later change makes that approval not count.
-It is not a cryptographic signature of the person. A quality debt recorded by
+digest of the working tree against the resolved merge-base. Committing that
+same content leaves the digest unchanged. A content edit makes that approval
+not count. When no base resolves, the digest falls back to the uncommitted
+diff against HEAD. It is not a cryptographic signature of the person. A quality debt recorded by
 quality-debt accepts one unresolved finding for the current attempt and does
 not waive the other gates. A docs exception recorded by docs-exception stores
 the GitHub login and a nonempty reason. It satisfies documentation for this

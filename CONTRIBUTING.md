@@ -17,6 +17,8 @@ pytest tests/test_quality.py::test_review_prompt_unchanged_without_story_context
   tests/test_durable_quality.py::test_carry_story_sends_plan_story_to_reviewer
 ```
 
+Diff-bound human approval is covered by `tests/test_diff_bound_approval.py`: the digest stays stable when the same content is committed against a resolved merge-base, a content edit or a commit with no resolved base invalidates it, and a dirty submodule, an untracked nested repository, or a missing merge-base yields an empty digest that `quality-approve` will not record. Verify with `pytest tests/test_diff_bound_approval.py`.
+
 ## Repository hygiene
 
 The root `.gitignore` keeps Python bytecode, pytest and packaging caches, virtualenvs, and local CodeHelm artifacts (`.codehelm/state.db*`, `.codehelm/plan.json`, `.codehelm/config.yaml`, `.codehelm/tmp/`) out of git. Do not force-add `__pycache__/` or `*.pyc` files.

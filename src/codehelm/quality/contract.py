@@ -6,8 +6,10 @@ or from git. A passing test exit code does not verify acceptance criteria. A
 criterion counts only when the test process the orchestrator ran emits a
 CODEHELM_ACCEPTANCE line, or an operator attests it. Human approval stores the
 GitHub login captured when quality-approve ran and a sha256 digest of the
-workspace diff. A later change makes that approval not count. With
-approval_signature off, that row is not a cryptographic signature. required
+working tree against the resolved merge-base. Committing that same content
+leaves the digest unchanged. A content edit makes that approval not count.
+When no base resolves, the digest falls back to the uncommitted diff against
+HEAD. With approval_signature off, that row is not a cryptographic signature. required
 checks an SSH or GPG signature over the current digest. An oversized-change justification
 counts only when a passing human row has nonempty detail and a nonempty
 identity. Evaluation does not call GitHub again. A quality debt accepts one unresolved finding on the
@@ -734,7 +736,7 @@ def assemble_evidence(store, task_id: str, attempt: int, policy: QualityPolicy,
         if row.gate == "oversized_justification" and row.source == "human" and row.passed
         and row.detail.strip() and row.identity.strip()
     )
-    current = diff_digest(workspace) if workspace else ""
+    current = diff_digest(workspace, policy.base_branch) if workspace else ""
     approvals = [
         row for row in rows
         if row.gate == "human_approval" and row.source == "human" and row.passed

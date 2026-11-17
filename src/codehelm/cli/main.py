@@ -1087,7 +1087,7 @@ def quality_approve(
     signature_kind: str = typer.Option("", help="ssh or gpg, required with --signature-file"),
     execute: bool = typer.Option(False, help="Record approval as the authenticated GitHub user"),
 ) -> None:
-    """Record high-risk approval as the GitHub login and a digest of the workspace diff."""
+    """Record high-risk approval as the GitHub login and a digest of the change against the resolved base."""
     try:
         policy = load_policy(STATE_DIR / "quality.yaml")
     except (ValueError, OSError) as exc:
@@ -1115,7 +1115,9 @@ def quality_approve(
         store.initialize()
         task = store.get(task_id)
         workspace = Path(task.workspace) if task and task.workspace else None
-        digest = diff_digest(workspace) if workspace is not None and workspace.is_dir() else ""
+        digest = ""
+        if workspace is not None and workspace.is_dir():
+            digest = diff_digest(workspace, policy.base_branch)
         if workspace is None or not workspace.is_dir() or not digest:
             raise ValueError("Human approval requires a workspace diff digest")
         stored_signature = ""
