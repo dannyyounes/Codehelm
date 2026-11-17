@@ -25,6 +25,7 @@ Ready versus draft pull requests are covered by `tests/test_github_pr.py`. `pr-c
 pytest tests/test_github_pr.py
 codehelm pr-create --help
 ```
+Documentation-agent story context, documentation-path checks, and an already-included documentation diff are covered by `tests/test_documentation.py`. Verify with `pytest tests/test_documentation.py`.
 
 ## Repository hygiene
 
