@@ -133,6 +133,12 @@ def generate_plan(goal: str, provider: str, workspace: Path, timeout: int = 600)
     return parse_plan(result.output)
 
 
+def coder_prompt(story_id: str, story: Story) -> str:
+    criteria = "\n".join(f"- {item}" for item in story.acceptance_criteria)
+    return (f"Implement {story_id}: {story.title}\n{story.description}\n"
+            f"Acceptance criteria:\n{criteria}")
+
+
 def save_plan(plan: Plan, destination: Path) -> None:
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)

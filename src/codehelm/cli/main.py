@@ -24,7 +24,7 @@ from codehelm.orchestrator.fx import FRANKFURTER_SOURCE, fetch_aud_per_usd, reso
 from decimal import Decimal, InvalidOperation
 from codehelm.planning.planner import (
     assign_published_keys, generate_plan, load_plan, replace_plan, save_plan,
-    publish_plan_to_jira, PlanningError)
+    publish_plan_to_jira, PlanningError, coder_prompt)
 from codehelm.quality.contract import (
     assess, auto_merge_block, decision_error, default_pr_base, load_policy, task_attempt,
 )
@@ -552,8 +552,7 @@ def schedule_durable(
         stories = {story.id: story for story in plan_obj.stories}
         def launch(sid: str):
             story = stories[sid]
-            prompt = (f"Implement {sid}: {story.title}\\n{story.description}\\n"
-                      "Acceptance criteria:\\n" + "\\n".join(story.acceptance_criteria))
+            prompt = coder_prompt(sid, story)
             stop = Event()
             def keep_alive():
                 while not stop.wait(heartbeat_seconds):
@@ -717,8 +716,7 @@ def resume(
         scheduler.reclaim_interrupted(story_id)
         engine = LifecycleEngine(repo, STATE_DIR / "state.db")
         story = next(item for item in scheduler.plan.stories if item.id == story_id)
-        prompt = (f"Implement {story_id}: {story.title}\\n{story.description}\\n"
-                  "Acceptance criteria:\\n" + "\\n".join(story.acceptance_criteria))
+        prompt = coder_prompt(story_id, story)
         status = scheduler.carry_story(
             story_id, engine, prompt=prompt, provider=provider,
             test_command=[test_cmd], security_command=[security_cmd],
