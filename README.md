@@ -243,7 +243,7 @@ The CLI and the durable wave do not pass that argument.
 
 A block longer than 12000 characters is cut at that length. The cut can
 split a line and can drop criteria that fall past it. This instruction,
-then the original review prompt, follow the cut in full:
+then the original review prompt and the verification note (below), follow the cut in full:
 
 ```text
 Judge the change against the story and acceptance criteria. Report real defects: correctness, regressions, security issues within the declared scope, and missing tests for the criteria. Do not request hardening for cases the story declares out of scope. If remaining concerns are only out-of-scope or optional improvements, list them as notes and still return APPROVED.
@@ -252,7 +252,11 @@ Judge the change against the story and acceptance criteria. Report real defects:
 Approval is still the reviewer's last line exactly `APPROVED`, a different
 provider from the author, and an unchanged Git snapshot. CodeHelm does not
 classify findings as in or out of scope. With none of the story fields set,
-the prompt is the original code or architecture prompt. `validate` uses the
+the prompt is the original code or architecture prompt plus the verification note.
+Every review prompt ends with that fixed note: CodeHelm runs its gates
+outside the review and records them separately, and a reviewer environment
+that cannot run tests or other checks is not by itself a reason to return
+`CHANGES_REQUESTED`. The note does not say any particular gate ran. `validate` uses the
 code prompt. `validate-after-docs` uses the code prompt and, when the
 quality policy runs architecture review, the architecture prompt.
 When a quality policy file is present, `schedule-durable` and `resume`

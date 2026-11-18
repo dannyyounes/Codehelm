@@ -2,6 +2,7 @@ import json
 from unittest.mock import patch
 from codehelm.quality.gates import (
     GateResult, _REVIEW_PROMPTS, _STORY_CONTEXT_LIMIT, _STORY_REVIEW_INSTRUCTION,
+    _VERIFICATION_NOTE,
     command_gate, independent_review,
 )
 from codehelm.orchestrator.lifecycle import LifecycleEngine
@@ -72,8 +73,21 @@ def _prompt(tmp_path, **kwargs):
 
 def test_review_prompt_unchanged_without_story_context(tmp_path):
     result, prompt = _prompt(tmp_path)
-    assert result.passed and prompt == _REVIEW_PROMPTS["code"]
-    assert _prompt(tmp_path, kind="architecture")[1] == _REVIEW_PROMPTS["architecture"]
+    assert result.passed and prompt == f'{_REVIEW_PROMPTS["code"]}\n\n{_VERIFICATION_NOTE}'
+    assert _prompt(tmp_path, kind="architecture")[1] == (
+        f'{_REVIEW_PROMPTS["architecture"]}\n\n{_VERIFICATION_NOTE}')
+
+
+def test_verification_note_once_and_rest_unchanged(tmp_path):
+    tail = f"\n\n{_VERIFICATION_NOTE}"
+    for kind in ("code", "architecture"):
+        for ctx in ({}, {"story_title": "T", "story_description": "D",
+                         "acceptance_criteria": ["A"], "scope_text": "S"}):
+            _r, prompt = _prompt(tmp_path, kind=kind, **ctx)
+            assert prompt.count(_VERIFICATION_NOTE) == 1 and prompt.endswith(tail)
+            rest = prompt[: -len(tail)]
+            assert rest.endswith(_REVIEW_PROMPTS[kind])
+            assert (rest == _REVIEW_PROMPTS[kind]) == (not ctx)
 
 
 def test_review_prompt_includes_story_context(tmp_path):
@@ -82,7 +96,7 @@ def test_review_prompt_includes_story_context(tmp_path):
         story_description="Pass the story.\n\nThreat model\nhonest local workspace",
         acceptance_criteria=["Prompt includes the story"],
         scope_text="OUT OF SCOPE remote attackers")
-    assert result.passed and prompt.endswith(_REVIEW_PROMPTS["architecture"])
+    assert result.passed and _REVIEW_PROMPTS["architecture"] in prompt
     assert _STORY_REVIEW_INSTRUCTION in prompt
     for text in ("Story", "Ship context", "Acceptance criteria", "Prompt includes the story",
                  "Declared scope and threat model", "OUT OF SCOPE remote attackers",
@@ -94,9 +108,9 @@ def test_story_context_is_truncated(tmp_path):
     _result, prompt = _prompt(
         tmp_path, story_title="T", story_description="D" * 30000,
         acceptance_criteria=["c"], scope_text="SCOPE")
-    context, _, instruction = prompt[: -len(_REVIEW_PROMPTS["code"]) - 2].rpartition("\n\n")
+    context, _, instruction = prompt[: -len(_REVIEW_PROMPTS["code"]) - len(_VERIFICATION_NOTE) - 4].rpartition("\n\n")
     assert instruction == _STORY_REVIEW_INSTRUCTION and len(context) == _STORY_CONTEXT_LIMIT
-    assert prompt.endswith(_REVIEW_PROMPTS["code"]) and "D" * (_STORY_CONTEXT_LIMIT + 1) not in prompt
+    assert _REVIEW_PROMPTS["code"] in prompt and "D" * (_STORY_CONTEXT_LIMIT + 1) not in prompt
 
 
 def test_validate_passes_story_context(tmp_path, monkeypatch):

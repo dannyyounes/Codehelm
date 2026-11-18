@@ -166,13 +166,23 @@ _STORY_REVIEW_INSTRUCTION = (
 )
 
 
+_VERIFICATION_NOTE = (
+    "Codehelm runs its configured gates outside this review, in a writable workspace, and "
+    "records their results separately. Which gates run depends on the quality policy and the "
+    "validation step; this note does not say that any particular check ran. If your "
+    "environment cannot run tests, builds, audits or other checks, that is not a defect in "
+    "the change and is not by itself a reason to return CHANGES_REQUESTED: review the diff "
+    "itself."
+)
+
+
 def _review_prompt(kind: str, story_title: str | None, story_description: str | None,
                    acceptance_criteria: list[str] | tuple[str, ...] | None,
                    scope_text: str | None) -> str:
     base = _REVIEW_PROMPTS[kind]
     if (story_title is None and story_description is None
             and acceptance_criteria is None and scope_text is None):
-        return base
+        return f"{base}\n\n{_VERIFICATION_NOTE}"
     criteria = "\n".join(f"- {item}" for item in (acceptance_criteria or ()))
     lines = ["Story", story_title or "", story_description or "", "", "Acceptance criteria", criteria]
     if scope_text is not None:
@@ -180,7 +190,7 @@ def _review_prompt(kind: str, story_title: str | None, story_description: str | 
     context = "\n".join(lines)
     if len(context) > _STORY_CONTEXT_LIMIT:
         context = context[:_STORY_CONTEXT_LIMIT]
-    return f"{context}\n\n{_STORY_REVIEW_INSTRUCTION}\n\n{base}"
+    return f"{context}\n\n{_STORY_REVIEW_INSTRUCTION}\n\n{base}\n\n{_VERIFICATION_NOTE}"
 
 
 def independent_review(workspace: Path, author: str, reviewer: str,
