@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 from codehelm.cli.main import app
-from codehelm.providers.adapters import CLIProvider, ProviderError
+from codehelm.providers.adapters import CLIProvider, ProviderError, execute_metered
 
 
 def test_provider_names():
@@ -112,3 +112,80 @@ def test_cursor_prompt_not_parsed_as_option(tmp_path):
          patch("codehelm.providers.adapters.subprocess.run", return_value=_Done()) as run:
         CLIProvider("cursor").execute("--help", tmp_path)
     assert run.call_args[0][0][-2:] == ["--", "--help"]
+
+
+class _Quiet:
+    returncode = 0
+    stdout = "{}"
+    stderr = ""
+
+
+def _run(monkeypatch, tmp_path, fn, env=None):
+    for key in ("CODEHELM_CLAUDE_ARGS", "CODEHELM_CLAUDE_ARGS_DOCS"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
+    with patch("codehelm.providers.adapters.shutil.which", return_value="/usr/bin/x"), \
+         patch("codehelm.providers.adapters.subprocess.run", return_value=_Quiet()) as run:
+        try:
+            fn()
+        finally:
+            return_run = run
+    return return_run
+
+
+def _cmd(run):
+    return run.call_args[0][0]
+
+
+def test_claude_args_unset_keeps_command(monkeypatch, tmp_path):
+    run = _run(monkeypatch, tmp_path, lambda: CLIProvider("claude").execute("p", tmp_path))
+    assert _cmd(run) == ["claude", "-p", "p"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("claude", "p", tmp_path))
+    assert _cmd(run) == ["claude", "-p", "--output-format", "json", "p"]
+
+
+def test_claude_args_set(monkeypatch, tmp_path):
+    env = {"CODEHELM_CLAUDE_ARGS": "--model sonnet"}
+    run = _run(monkeypatch, tmp_path, lambda: CLIProvider("claude").execute("p", tmp_path), env)
+    assert _cmd(run) == ["claude", "-p", "--model", "sonnet", "--", "p"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("claude", "p", tmp_path), env)
+    assert _cmd(run) == ["claude", "-p", "--output-format", "json", "--model", "sonnet", "--", "p"]
+
+
+def test_claude_args_role_precedence_and_blank_fallback(monkeypatch, tmp_path):
+    env = {"CODEHELM_CLAUDE_ARGS": "--model sonnet", "CODEHELM_CLAUDE_ARGS_DOCS": "--model haiku"}
+    run = _run(monkeypatch, tmp_path, lambda: CLIProvider("claude", role="docs").execute("p", tmp_path), env)
+    assert _cmd(run)[2:4] == ["--model", "haiku"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("claude", "p", tmp_path, role="docs"), env)
+    assert _cmd(run)[4:6] == ["--model", "haiku"]
+    env["CODEHELM_CLAUDE_ARGS_DOCS"] = "   "
+    run = _run(monkeypatch, tmp_path, lambda: CLIProvider("claude", role="docs").execute("p", tmp_path), env)
+    assert _cmd(run)[2:4] == ["--model", "sonnet"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("claude", "p", tmp_path, role="docs"), env)
+    assert _cmd(run)[4:6] == ["--model", "sonnet"]
+
+
+@pytest.mark.parametrize("value", ["--model 'sonnet", "--dangerously-skip-permissions",
+                                   "--allow-dangerously-skip-permissions",
+                                   "--permission-mode=bypassPermissions"])
+def test_claude_args_invalid_raises_without_launch(monkeypatch, tmp_path, value):
+    env = {"CODEHELM_CLAUDE_ARGS": value}
+    for fn in (lambda: CLIProvider("claude").execute("p", tmp_path),
+               lambda: execute_metered("claude", "p", tmp_path)):
+        def call(fn=fn):
+            with pytest.raises(ProviderError, match="CODEHELM_CLAUDE_ARGS"):
+                fn()
+        run = _run(monkeypatch, tmp_path, call, env)
+        assert not run.called
+
+
+def test_claude_args_ignored_by_other_providers(monkeypatch, tmp_path):
+    env = {"CODEHELM_CLAUDE_ARGS": "--model sonnet"}
+    run = _run(monkeypatch, tmp_path, lambda: CLIProvider("codex").execute("p", tmp_path), env)
+    assert _cmd(run) == ["codex", "exec", "p"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("codex", "p", tmp_path), env)
+    assert _cmd(run) == ["codex", "exec", "--json", "p"]
+    run = _run(monkeypatch, tmp_path, lambda: execute_metered("codex", "p", tmp_path),
+               {"CODEHELM_CLAUDE_ARGS": "'bad"})
+    assert _cmd(run) == ["codex", "exec", "--json", "p"]

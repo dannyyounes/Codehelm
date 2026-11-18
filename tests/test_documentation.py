@@ -42,6 +42,13 @@ def test_documentation_requires_actual_change(workspace):
         assert not run_documentation_agent(workspace, "claude").passed
 
 
+def test_documentation_agent_uses_docs_role(workspace):
+    with patch("codehelm.agents.documentation.CLIProvider") as provider:
+        provider.return_value.execute.return_value = AgentResult("claude", 0, "done", "")
+        run_documentation_agent(workspace, "claude")
+    provider.assert_called_once_with("claude", role="docs")
+
+
 def test_documentation_change_accepted(workspace):
     def edit(*args):
         (workspace / "README.md").write_text("Updated")
