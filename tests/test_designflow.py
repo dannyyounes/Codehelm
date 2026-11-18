@@ -211,8 +211,8 @@ def test_execute_prompt_selects_transport_and_hides_success_stdout_on_failure(tm
     assert execute_prompt("claude", "prompt", tmp_path, 5, "http") == '{"ok": true}'
 
     class Broken:
-        def __init__(self, name):
-            pass
+        def __init__(self, name, role=None):
+            assert role == "design"
 
         def execute(self, prompt, cwd, timeout):
             return AgentResult("claude", 1, "secret-stdout", "boom")

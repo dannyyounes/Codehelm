@@ -70,7 +70,7 @@ def execute_prompt(provider: str, prompt: str, workspace: Path, timeout: int, tr
     if transport == "http":
         adapter = HTTPProvider(provider)
     elif transport == "cli":
-        adapter = CLIProvider(provider)
+        adapter = CLIProvider(provider, role="design")
     else:
         raise DesignFlowError(f"Unknown transport: {transport}")
     try:

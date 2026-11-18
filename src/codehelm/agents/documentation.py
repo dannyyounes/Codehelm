@@ -93,7 +93,7 @@ def run_documentation_agent(workspace: Path, provider: str,
         "or tests. Document how to use and verify the change. "
         "If documentation cannot be completed, explain the blocker."
     ) + _story_clause(story_title, story_description, acceptance_criteria)
-    result = CLIProvider(provider).execute(prompt, workspace, timeout)
+    result = CLIProvider(provider, role="docs").execute(prompt, workspace, timeout)
     if result.exit_code:
         return DocumentationResult(False, f"Documentation agent failed: {result.error[-1500:]}")
     after = _changed_paths(workspace)

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import urllib.error
@@ -47,10 +48,11 @@ class CLIProvider:
         "cursor": ("cursor-agent", "-p", "--trust", "--output-format", "text"),
     }
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, role: str | None = None):
         if name not in self.COMMANDS:
             raise ProviderError(f"Unknown provider: {name}")
         self.name = name
+        self.role = role
 
     def available(self) -> bool:
         return shutil.which(self.COMMANDS[self.name][0]) is not None
@@ -67,6 +69,10 @@ class CLIProvider:
         if self.name == "cursor":
             # "--" stops a prompt that starts with "-" being parsed as an option.
             args = [*args, "--model", cursor_model(), "--"]
+        elif self.name == "claude":
+            extra = claude_args(self.role)
+            if extra:
+                args = [*args, *extra, "--"]
         try:
             proc = subprocess.run(
                 [executable, *args, prompt],
@@ -92,6 +98,31 @@ def cursor_model() -> str:
     return model
 
 
+_BYPASS_FLAGS = {"--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
+
+
+def claude_args(role: str | None = None) -> list[str]:
+    """Extra claude CLI args from CODEHELM_CLAUDE_ARGS_<ROLE> or CODEHELM_CLAUDE_ARGS."""
+    key = "CODEHELM_CLAUDE_ARGS"
+    raw = ""
+    if role:
+        key = f"CODEHELM_CLAUDE_ARGS_{role.upper()}"
+        raw = os.environ.get(key, "")
+    if not raw.strip():
+        key = "CODEHELM_CLAUDE_ARGS"
+        raw = os.environ.get(key, "")
+    if not raw.strip():
+        return []
+    try:
+        tokens = shlex.split(raw)
+    except ValueError as exc:
+        raise ProviderError(f"Invalid {key}: {exc}") from None
+    for token in tokens:
+        if token in _BYPASS_FLAGS or "bypassPermissions" in token:
+            raise ProviderError(f"{key} must not bypass permissions")
+    return tokens
+
+
 @dataclass(frozen=True)
 class MeteredResult:
     agent: AgentResult
@@ -99,7 +130,7 @@ class MeteredResult:
 
 
 def execute_metered(provider: str, prompt: str, cwd: Path,
-                    timeout: int = 600) -> MeteredResult:
+                    timeout: int = 600, role: str | None = None) -> MeteredResult:
     """Opt-in structured CLI execution; unsupported output leaves usage unknown."""
     adapter = CLIProvider(provider)
     if not prompt.strip():
@@ -109,8 +140,10 @@ def execute_metered(provider: str, prompt: str, cwd: Path,
         raise ProviderError("Workspace does not exist")
     if not adapter.available():
         raise ProviderError(f"{provider} CLI not found in PATH")
+    extra = claude_args(role) if provider == "claude" else []
     commands = {
-        "claude": ["claude", "-p", "--output-format", "json", prompt],
+        "claude": ["claude", "-p", "--output-format", "json", *extra, "--", prompt]
+        if extra else ["claude", "-p", "--output-format", "json", prompt],
         "codex": ["codex", "exec", "--json", prompt],
         "gemini": ["gemini", "-p", prompt, "--output-format", "json"],
     }
