@@ -210,3 +210,59 @@ def test_resume_wires_timeouts(tmp_path, monkeypatch):
     assert custom["timeout"] == 700
     assert default["agent_timeout"] == 600
     assert default["timeout"] == 300
+
+
+def _assert_coder_prompt(prompt: str) -> None:
+    assert "\\n" not in prompt
+    lines = prompt.split("\n")
+    assert lines[0] == "Implement S1: First"
+    assert lines[1] == "First story"
+    assert lines[2] == "Acceptance criteria:"
+    assert lines[3:] == ["- Works", "- Second criterion"]
+
+
+_BASE_PLAN_TEXT = _plan_text
+
+
+def _two_criteria_plan() -> str:
+    data = json.loads(_BASE_PLAN_TEXT())
+    data["stories"][0]["acceptance_criteria"] = ["Works", "Second criterion"]
+    return json.dumps(data)
+
+
+def test_schedule_durable_passes_real_newline_prompt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    repo = _make_repo(tmp_path / "repo")
+    plan = tmp_path / "plan.json"
+    plan.write_text(_two_criteria_plan(), encoding="utf-8")
+    (tmp_path / ".codehelm").mkdir()
+    seen = {}
+
+    def fake_carry(self, story_id, engine, **kwargs):
+        seen.update(kwargs)
+        return "awaiting_validation"
+
+    with patch("codehelm.orchestrator.durable.DurableScheduler.carry_story", fake_carry):
+        result = runner.invoke(app, _durable_args(plan, repo, "--execute"))
+    assert result.exit_code == 0, result.output
+    _assert_coder_prompt(seen["prompt"])
+
+
+def test_resume_passes_real_newline_prompt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(f"{__name__}._plan_text", _two_criteria_plan)
+    plan_path = _prepare_interrupted(tmp_path)
+    repo = _make_repo(tmp_path / "repo")
+    seen = {}
+
+    def fake_carry(self, story_id, engine, **kwargs):
+        seen.update(kwargs)
+        return "awaiting_validation"
+
+    with patch("codehelm.orchestrator.durable.DurableScheduler.carry_story", fake_carry):
+        result = runner.invoke(app, [
+            "resume", "PLAN-S1-A1", "--execute", "--prefix", "PLAN",
+            "--plan-file", str(plan_path), "--repo", str(repo),
+        ])
+    assert result.exit_code == 0, result.output
+    _assert_coder_prompt(seen["prompt"])

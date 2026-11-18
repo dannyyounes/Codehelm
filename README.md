@@ -595,6 +595,11 @@ no cross-host liveness check, no automatic retry of a failed story, and no
 sandbox. Attempt limits are not monetary spend protection. Each
 `schedule-durable --execute` dispatches one wave.
 
+The coding-agent prompt built for `schedule-durable --execute` and `codehelm resume --execute` comes from
+one shared helper, `coder_prompt` in `codehelm.planning.planner`. It joins real newline-separated lines:
+`Implement <id>: <title>`, the description, `Acceptance criteria:`, then one `- <criterion>` line per
+criterion. Verify with `pytest tests/test_lifecycle_timeouts.py`.
+
 When `.codehelm/quality.yaml` exists, that same claim continues through the
 test, security, review, documentation, and post-documentation gates before
 the dispatch row is released. The story then becomes `blocked`,
