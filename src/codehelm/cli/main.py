@@ -739,7 +739,10 @@ def schedule_retry(
     max_attempts: int | None = typer.Option(None, min=1, max=5),
     execute: bool = typer.Option(False),
 ) -> None:
-    """Authorize a retry after manually inspecting a failed/interrupted attempt."""
+    """Authorize a retry after inspecting a failed, interrupted, blocked, or review-rejected attempt.
+
+    A story left at awaiting_validation is accepted only when its latest attempt task is changes_requested.
+    """
     if not execute:
         typer.echo("Dry run. Add --execute to authorize a retry.")
         return

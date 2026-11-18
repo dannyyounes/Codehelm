@@ -470,12 +470,22 @@ class DurableScheduler:
         return decision.status
 
     def retry(self, story_id: str, budget: DispatchBudget) -> None:
-        """Explicit retry authorization after inspecting the previous attempt."""
+        """Explicit retry authorization after inspecting the previous attempt.
+
+        Accepts failed, interrupted, and blocked stories, and also awaiting_validation
+        when the latest attempt's task is changes_requested (no quality policy).
+        """
         with sqlite3.connect(self.store.database) as db:
             row = db.execute("SELECT state,attempts FROM dispatches WHERE prefix=? AND story_id=?",
                              (self.prefix, story_id)).fetchone()
-            if not row or row[0] not in {"failed", "interrupted", "blocked"}:
-                raise ValueError("Only failed, interrupted, or quality-blocked stories can be retried")
+            retryable = bool(row) and row[0] in {"failed", "interrupted", "blocked"}
+            if row and row[0] == "awaiting_validation":
+                # No quality policy: a review rejection leaves the dispatch here.
+                task = self.store.get(f"{self.prefix}-{story_id}-A{row[1]}")
+                retryable = task is not None and task.status == "changes_requested"
+            if not retryable:
+                raise ValueError("Only failed, interrupted, quality-blocked, or review-rejected "
+                                 "(changes_requested) stories can be retried")
             if row[1] >= budget.max_attempts:
                 raise ValueError("Per-story attempt limit reached")
             db.execute("UPDATE dispatches SET state='pending',error=NULL WHERE prefix=? AND story_id=?",
